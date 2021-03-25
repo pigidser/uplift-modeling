@@ -2,6 +2,9 @@ import numpy as np
 import pandas as pd
 
 class Splitting(object):
+    
+    def __init__(self):
+        self.split = None
 
     def random_promo_by_account(self, df, indexes, account, seed):
         """

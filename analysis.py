@@ -17,6 +17,7 @@ class AnalysisMetrics(object):
     def __init__(self, model, reevaluate=False, number_tests=10,
                  use_product_filter=True, filter_threshold=300, target_ratio_test=0.20):
         self.model = model
+        self.full_model = model
         self.reevaluate = reevaluate
         self.number_tests = number_tests
         self.use_product_filter = use_product_filter
@@ -109,6 +110,9 @@ class AnalysisMetrics(object):
         
         splitting = Splitting()
         self.train, self.test = splitting.split(seed, self.model.data, self.target_ratio_test)
+        
+        # Remove duped rows (possibly duplication has been provided)
+        self.test = self.test.drop('cluster', axis=1).drop_duplicates()
 
         self.train_x = self.train.loc[:, self.train.columns != self.model.target]
         self.train_y = self.train.loc[:, self.train.columns == self.model.target]
@@ -122,17 +126,12 @@ class AnalysisMetrics(object):
         self.train_y = self.train_y.squeeze()
         self.test_y = self.test_y.squeeze()
 
+        # Train model and validate performance
         with suppress_stdout():
-            # Train model and validate performance
-            model = MultiModel(group_col=self.model.cat_feature, clusters=self.model.clusters,
-                               params=self.model.params, selected_features=self.model.selected_features,
-                               nominals=self.model.nominal_features,
-                               ordinals=self.model.ordinal_features)
+            self.model.model.fit(self.train_x, self.train_y)
 
-            model.fit(self.train_x, self.train_y)
-            
-        self.pred_train_y = model.predict(self.train_x)
-        self.pred_test_y = model.predict(self.test_x)
+        self.pred_train_y = self.model.model.predict(self.train_x)
+        self.pred_test_y = self.model.model.predict(self.test_x)
 
         m = dict()
 
@@ -187,9 +186,12 @@ class AnalysisMetrics(object):
         splitting = Splitting()
         self.train, self.test = splitting.split(seed, self.model.data, self.target_ratio_test)
 
+        # Remove duped rows (possibly duplication has been provided)
+        self.test = self.test.drop('cluster', axis=1).drop_duplicates()
+
         # Exclude products with large mape metric from test
         self.test = self.apply_product_filter(self.test, self.filter_data)
-
+    
         # train in train_set and check the results in test set
         # split data into X, Y
         self.train_x = self.train.loc[:, self.train.columns != self.model.target]
@@ -203,20 +205,13 @@ class AnalysisMetrics(object):
         # transform to Series
         self.train_y = self.train_y.squeeze()
         self.test_y = self.test_y.squeeze()
-
+        
+        # Train model and validate performance
         with suppress_stdout():
-            # Train model and validate performance
-            model = MultiModel(group_col=self.model.cat_feature, clusters=self.model.clusters,
-                               params=self.model.params, selected_features=self.model.selected_features,
-                               nominals=self.model.nominal_features,
-                               ordinals=self.model.ordinal_features)
-
-            model.fit(self.train_x, self.train_y)
-        self.pred_train_y = model.predict(self.train_x)
-        self.pred_test_y = model.predict(self.test_x)
-
-        train_R2 = round(r2_score(self.train_y, self.pred_train_y), 2)
-        test_R2 = round(r2_score(self.test_y, self.pred_test_y), 2)
+            self.model.model.fit(self.train_x, self.train_y)
+    
+        self.pred_train_y = self.model.model.predict(self.train_x)
+        self.pred_test_y = self.model.model.predict(self.test_x)
 
         m = dict()
         metric_filter = ['r2_m', 'r2_h', 'r2_m_h', 'wape_m', 'wape_h', 'wape_m_h', 'mape_m', 'mape_h', 'mape_m_h', \
@@ -281,7 +276,7 @@ class AnalysisMetrics(object):
         self.test = self.model.future_data.copy()
         self.test_x = self.test.loc[:, self.test.columns != self.model.future_target]
         self.test_y = self.test.loc[:, self.test.columns == self.model.future_target]
-        self.pred_test_y = self.model.model.predict(self.test_x)
+        self.pred_test_y = self.full_model.model.predict(self.test_x)
 
         m = dict()
 
@@ -317,7 +312,7 @@ class AnalysisMetrics(object):
         self.test = self.apply_product_filter(self.test, self.filter_future_data)
         self.test_x = self.test.loc[:, self.test.columns != self.model.future_target]
         self.test_y = self.test.loc[:, self.test.columns == self.model.future_target]
-        self.pred_test_y = self.model.model.predict(self.test_x)
+        self.pred_test_y = self.full_model.model.predict(self.test_x)
 
         m = dict()
         metric_filter = ['r2_f_m_h', 'wape_f_m_h', 'mape_f_m_h', 'bias_f_m_h', 'sfa_f_m_h']
@@ -394,8 +389,7 @@ class AnalysisMetrics(object):
                                         filters[key]['original_product_dimension_25'],
                                         filters[key]['original_product_dimension_26']))
 
-    def overall_metrics(self):
-        """Get overall metrics"""
+    def get_historic_overall_results(self):
         # Historic Data
         lines = list()
         for item in self.metrics_data:
@@ -428,10 +422,9 @@ class AnalysisMetrics(object):
                      'Overall / mape_m','Overall / mape_h','Overall / mape__m_h',
                      'Overall / bias_m','Overall / bias_h','Overall / bias__m_h',
                      'Overall / sfa_m','Overall / sfa_h','Overall / sfa__m_h',]]
-        data = data.drop('seed', axis=1)
-        data = data.drop_duplicates()
-        data = data.quantile([0.5]).reset_index(drop=True)
-        
+        return data
+    
+    def get_future_overall_results(self):
         # Future data
         lines = list()
         line = dict()
@@ -444,13 +437,22 @@ class AnalysisMetrics(object):
         future_data = pd.DataFrame(lines)
         future_data = future_data[['Overall / r2_f_m_h','Overall / wape_f_m_h','Overall / mape_f_m_h',
                                    'Overall / bias_f_m_h','Overall / sfa_f_m_h']]
-
-        # Merge historic and future data
+        return future_data
+    
+    def overall_metrics(self):
+        """Get overall metrics"""
+        # Historic test results
+        data = self.get_historic_overall_results()
+        data = data.drop('seed', axis=1)
+        data = data.drop_duplicates()
+        data = data.quantile([0.5]).reset_index(drop=True)
+        # Future test results
+        future_data = self.get_future_overall_results()
+        # Merge historic and future test results
         df = pd.concat([data, future_data], axis=1)
         return df
     
-    def account_metrics(self):
-        """Get metrics by accounts"""
+    def get_historic_account_results(self):
         # Historic Data
         lines = list()
         for item in self.metrics_data:
@@ -474,9 +476,9 @@ class AnalysisMetrics(object):
                     line[key_acc + ' / sfa__m_h'] = item[key_acc]['sfa__m_h']
             lines.append(line)
         data = pd.DataFrame(lines)
-        data = data.drop_duplicates()
-        data = data.quantile([0.5]).reset_index(drop=True)
+        return data
         
+    def get_future_account_results(self):
         # Future data
         lines = list()
         line = dict()
@@ -489,7 +491,16 @@ class AnalysisMetrics(object):
                 line[key_acc + ' / sfa_f_m_h'] = self.metrics_future_data[key_acc]['sfa_f_m_h']
         lines.append(line)
         future_data = pd.DataFrame(lines)
-        
+        return future_data
+
+    def account_metrics(self):
+        """Get metrics by accounts"""
+        # Historic test results
+        data = self.get_historic_account_results()
+        data = data.drop_duplicates()
+        data = data.quantile([0.5]).reset_index(drop=True)
+        # Future test results
+        future_data = self.get_future_account_results()
         # Merge historic and future data
         df = pd.concat([data, future_data], axis=1)
         return df

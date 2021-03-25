@@ -13,6 +13,8 @@ from vf_portalytics.tool import get_categorical_features
 from vf_portalytics.ml_helpers import get_transformer
 
 from splitting import Splitting
+from transforms import ClusterTransform
+
 
 class Hyperparameters(object):
     
@@ -37,7 +39,7 @@ class Hyperparameters(object):
             'reg_lambda' : hp.quniform('reg_lambda', 1.0, 1.5, 0.05)
         }
         self.seed = 0
-        self.max_evals = 200
+        self.max_evals = self.model.max_evals
         self.target_ratio_val = 0.30
         
     def score(self, params, train_x_group, train_y_group, val_x_group, val_y_group):
@@ -124,7 +126,7 @@ class Hyperparameters(object):
         mask = df.index.isin(val_indexes)
         train = df[~mask]
         val = df[mask]
-
+        
         # Exclude products which exists only in test
         # test = test[test['original_pid'].isin(pd.concat([train.original_pid, val.original_pid]))]
         # print("df: {0}, train: {1}, val: {2}, test: {3}".format(df.shape[0], train.shape[0], val.shape[0], test.shape[0]))
@@ -143,8 +145,11 @@ class Hyperparameters(object):
         train_y = train_y.squeeze()
         # test_y = test_y.squeeze()
         val_y = val_y.squeeze()
+        
+        # Create cluster according to cat_feature
+        train_x = ClusterTransform(self.model.cat_feature).transform(train_x)
 
-        groups = train_x.groupby(self.model.cat_feature)
+        groups = train_x.groupby('cluster')
         params = {}
         for gp_key, group in groups:
             print('Checking ' + str(gp_key) + ' ...')
@@ -152,7 +157,9 @@ class Hyperparameters(object):
             train_x_group = group[list(self.model.selected_features[gp_key])]
             train_y_group = train_y[train_x_group.index]
             # validation set
-            val_x_group = val_x[val_x[self.model.cat_feature]==gp_key]
+            val_x_group = val_x[val_x['cluster']==gp_key]
+            # Remove duped rows (possibly duplication has been provided)
+            val_x_group = val_x_group.drop('cluster', axis=1).drop_duplicates()
             val_x_group = val_x_group[list(self.model.selected_features[gp_key])]
             val_y_group = val_y[val_x_group.index]
             # find best parameters for each model-group
