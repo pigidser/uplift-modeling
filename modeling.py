@@ -24,6 +24,8 @@ class Model(object):
         self.metrics_future_data = None
         self.filter_data = None
         self.filter_future_data = None
+        self.account_test_filter = None
+        self.test_splits = None
         
         self.model_initialized = False
         
@@ -59,8 +61,10 @@ class Model(object):
         self.filter_future_data = analysis.filter_future_data
         self.metrics_data = analysis.metrics_data
         self.metrics_future_data = analysis.metrics_future_data
+        self.account_test_filter = analysis.account_test_filter
+        self.test_splits = analysis.test_splitting.splits
         
-    def create(self, params, max_evals, feature_filename, features, target, cat_feature,
+    def create(self, params, max_evals, target_ratio_val, feature_filename, features, target, cat_feature,
                output_dir, data_filename, filter_filename, account_filter, future_data_filename, future_target,
                duplication_map):
         """
@@ -69,6 +73,7 @@ class Model(object):
 #         self.logger = logging.getLogger('sales_support_helper_application.' + __name__)
         self.params = params
         self.max_evals = max_evals or 200
+        self.target_ratio_val = target_ratio_val
         self.feature_filename = feature_filename
         self.features = features
         self.target = target
@@ -80,16 +85,13 @@ class Model(object):
         self.future_data_filename = future_data_filename
         self.future_target = future_target
         self.duplication_map = duplication_map
-        self.filter_data = None
-        self.filter_future_data = None
-        self.metrics = None
         
         self.__load_dataset()
         self.__load_future_data()
         self.__load_features()
         self.__apply_account_filter()
         self.__set_clusters()
-        # __set_params() run before training the model
+        # __set_params() runs before training the model
         self.__apply_duplication_map()
         
         self.model_initialized = True
@@ -278,6 +280,7 @@ class Model(object):
             'data_filename': self.data_filename,
             'filter_filename': self.filter_filename,
             'duplication_map': self.duplication_map,
+            'account_test_filter': self.account_test_filter,
             'target': self.target,
             'cat_feature': self.cat_feature,
             'future_data_filename': self.future_data_filename,
@@ -288,6 +291,8 @@ class Model(object):
             'filter_data': self.filter_data,
             'filter_future_data': self.filter_future_data,
             'max_evals': self.max_evals,
+            'target_ratio_val': self.target_ratio_val,
+            'test_splits': self.test_splits,
         }
         with open(meta_path, 'w') as meta_file:
             json.dump(meta_data, meta_file)
@@ -327,6 +332,7 @@ class Model(object):
                 self.data_filename=meta_data.get('data_filename')
                 self.filter_filename=meta_data.get('filter_filename')
                 self.duplication_map=meta_data.get('duplication_map')
+                self.account_test_filter=meta_data.get('account_test_filter')
                 self.target=meta_data.get('target')
                 self.cat_feature=meta_data.get('cat_feature')
                 self.future_data_filename=meta_data.get('future_data_filename')
@@ -337,6 +343,8 @@ class Model(object):
                 self.filter_data = meta_data.get('filter_data')
                 self.filter_future_data = meta_data.get('filter_future_data')
                 self.max_evals = meta_data.get('max_evals')
+                self.target_ratio_val = meta_data.get('target_ratio_val')
+                self.test_splits = meta_data.get('test_splits')
 
     def __standard_load(self):
         prediction_model = PredictionModel(self.model_name, path=self.output_dir, one_hot_encode=False)

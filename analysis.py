@@ -14,8 +14,8 @@ plt.rcParams['figure.dpi'] = 100
 
 class AnalysisMetrics(object):
     
-    def __init__(self, model, reevaluate=False, number_tests=10,
-                 use_product_filter=True, filter_threshold=300, target_ratio_test=0.20):
+    def __init__(self,model, reevaluate=False, number_tests=10,
+                 use_product_filter=True, filter_threshold=300, target_ratio_test=0.20, account_test_filter=None):
         self.model = model
         self.full_model = model
         self.reevaluate = reevaluate
@@ -23,6 +23,9 @@ class AnalysisMetrics(object):
         self.use_product_filter = use_product_filter
         self.filter_threshold = filter_threshold
         self.target_ratio_test = target_ratio_test
+        self.account_test_filter = account_test_filter
+        self.test_splitting = Splitting(splits=self.model.test_splits, data=self.model.data,
+                                        number_tests=number_tests, target_ratio_test=target_ratio_test)
 
         self.__initialize_filter_data()
         self.__initialize_filter_future_data()
@@ -30,7 +33,7 @@ class AnalysisMetrics(object):
         
         self.overalls = self.overall_metrics()
         self.accounts = self.account_metrics()
-        
+                
     def __initialize_filter_data(self):
         """ Find a filter for data"""
         
@@ -108,12 +111,15 @@ class AnalysisMetrics(object):
         if seed % 5 == 0:
             print("Test iteration {} of {}".format(seed + 1, self.number_tests))
         
-        splitting = Splitting()
-        self.train, self.test = splitting.split(seed, self.model.data, self.target_ratio_test)
+        self.train, self.test = self.test_splitting.get_split(seed, self.model.data)
         
         # Remove duped rows (possibly duplication has been provided)
         self.test = self.test.drop('cluster', axis=1).drop_duplicates()
 
+        # Apply account test filter
+        if not self.account_test_filter is None:
+            self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
+        
         self.train_x = self.train.loc[:, self.train.columns != self.model.target]
         self.train_y = self.train.loc[:, self.train.columns == self.model.target]
 
@@ -183,11 +189,14 @@ class AnalysisMetrics(object):
         if seed % 5 == 0:
             print("Test iteration {} of {}".format(seed + 1, self.number_tests))
         
-        splitting = Splitting()
-        self.train, self.test = splitting.split(seed, self.model.data, self.target_ratio_test)
+        self.train, self.test = self.test_splitting.get_split(seed, self.model.data)
 
         # Remove duped rows (possibly duplication has been provided)
         self.test = self.test.drop('cluster', axis=1).drop_duplicates()
+        
+        # Apply account test filter
+        if not self.account_test_filter is None:
+            self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
 
         # Exclude products with large mape metric from test
         self.test = self.apply_product_filter(self.test, self.filter_data)
@@ -274,6 +283,9 @@ class AnalysisMetrics(object):
     def __mape_future_data_detailed_test(self):
 
         self.test = self.model.future_data.copy()
+        # Apply account test filter
+        if not self.account_test_filter is None:
+            self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
         self.test_x = self.test.loc[:, self.test.columns != self.model.future_target]
         self.test_y = self.test.loc[:, self.test.columns == self.model.future_target]
         self.pred_test_y = self.full_model.model.predict(self.test_x)
@@ -308,7 +320,10 @@ class AnalysisMetrics(object):
     def test_future_data(self):
 
         self.test = self.model.future_data.copy()
-        # Apply filter
+        # Apply account test filter
+        if not self.account_test_filter is None:
+            self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
+        # Apply product test filter
         self.test = self.apply_product_filter(self.test, self.filter_future_data)
         self.test_x = self.test.loc[:, self.test.columns != self.model.future_target]
         self.test_y = self.test.loc[:, self.test.columns == self.model.future_target]

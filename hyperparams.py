@@ -40,7 +40,7 @@ class Hyperparameters(object):
         }
         self.seed = 0
         self.max_evals = self.model.max_evals
-        self.target_ratio_val = 0.30
+        self.target_ratio_val = self.model.target_ratio_val or 0.30
         
     def score(self, params, train_x_group, train_y_group, val_x_group, val_y_group):
 
@@ -118,32 +118,25 @@ class Hyperparameters(object):
         """
         
         """
+        # Making one split
+        splitting = Splitting(splits=None, data=self.model.data,
+                              number_tests=1, target_ratio_test=self.target_ratio_val)
         
-        # indexes of promo for validation
-        splitting = Splitting()
-        df = self.model.data.copy()
-        val_indexes = splitting.indexes_for_split(df, self.target_ratio_val, seed=self.seed)
-        mask = df.index.isin(val_indexes)
-        train = df[~mask]
-        val = df[mask]
+        train, val = splitting.get_split(0, self.model.data)
         
         # Exclude products which exists only in test
         # test = test[test['original_pid'].isin(pd.concat([train.original_pid, val.original_pid]))]
         # print("df: {0}, train: {1}, val: {2}, test: {3}".format(df.shape[0], train.shape[0], val.shape[0], test.shape[0]))
         # val = val[val['original_pid'].isin(train.original_pid)]
-        print("df: {0}, train: {1}, val: {2}".format(df.shape[0], train.shape[0], val.shape[0]))
+        print("data: {0}, train: {1}, val: {2}".format(self.model.data.shape[0], train.shape[0], val.shape[0]))
 
-        # train in train_set and check the results in test set
-        # split data into X, Y
         train_x = train.loc[:, train.columns != self.model.target]
         train_y = train.loc[:, train.columns == self.model.target]
 
         val_x = val.loc[:, val.columns != self.model.target]
         val_y = val.loc[:, val.columns == self.model.target]
 
-        # transform to Series
         train_y = train_y.squeeze()
-        # test_y = test_y.squeeze()
         val_y = val_y.squeeze()
         
         # Create cluster according to cat_feature
