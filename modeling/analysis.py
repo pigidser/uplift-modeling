@@ -14,18 +14,21 @@ plt.rcParams['figure.dpi'] = 100
 
 class AnalysisMetrics(object):
     
-    def __init__(self,model, reevaluate=False, number_tests=10,
+    def __init__(self, model, reevaluate=False, number_tests=None,
                  use_product_filter=True, filter_threshold=300, target_ratio_test=0.20, account_test_filter=None):
         self.model = model
         self.full_model = model
         self.reevaluate = reevaluate
-        self.number_tests = number_tests
+        if self.model.test_splits is None:
+            self.number_tests = number_tests or 10
+        else:
+            self.number_tests = len(self.model.test_splits)
         self.use_product_filter = use_product_filter
         self.filter_threshold = filter_threshold
         self.target_ratio_test = target_ratio_test
         self.account_test_filter = account_test_filter
         self.test_splitting = Splitting(splits=self.model.test_splits, data=self.model.data,
-                                        number_tests=number_tests, target_ratio_test=target_ratio_test)
+                                        number_tests=self.number_tests, target_ratio_test=self.target_ratio_test)
 
         self.__initialize_filter_data()
         self.__initialize_filter_future_data()
@@ -42,6 +45,7 @@ class AnalysisMetrics(object):
             metrics = self.__mape_data_detailed()
 
             df = self.__get_account_detailed_metrics(['mape_m'], metrics)
+            self.account_detailed_metrics = df
             s = df.median()
 
             filts = dict()
@@ -104,6 +108,8 @@ class AnalysisMetrics(object):
         metrics = list()
         for seed in range(self.number_tests):
             metrics.append(self.__mape_data_detailed_test_split(seed))
+        # To be stored with the model
+        self.metrics_detailed_mape = metrics
         return metrics
 
     def __mape_data_detailed_test_split(self, seed):
@@ -151,10 +157,9 @@ class AnalysisMetrics(object):
                                             (self.test['original_product_dimension_25']==product_25)] \
                                         ['original_product_dimension_26'].unique():
                     m_26 = dict()
-                    metric_dict = self.get_metrics_by_account_product25_product26(['mape_m', 'mape_h'],
+                    metric_dict = self.get_metrics_by_account_product25_product26(['mape_m'],
                                                                                 account, product_25, product_26)
                     m_26['mape_m'] = metric_dict['mape_m']
-                    m_26['mape_h'] = metric_dict['mape_h']
                     m_25[product_26] = m_26
 
                 m_acc[product_25] = m_25

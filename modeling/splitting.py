@@ -16,18 +16,15 @@ class Splitting(object):
         elif not isinstance(self.splits, dict):
             raise Exception("Splits should be a dictionary")
         elif len(self.splits) != number_tests:
-            raise Exception("Length of splits is not equal to number_tests!")
+            raise Exception("Length of splits ({}) is not equal to number_tests ({})!".format(len(self.splits), number_tests))
         
     def get_split(self, seed, data):
         """
         Get split according to saved information about splits as every 'seed' step
         
         """
-#         if self.data.shape[0] != self.data.shape[0]:
-#             raise Exception("The instance has been created with another dataset (not data)!")
-            
-        test = data[data['promotion_technical_id'].isin(self.splits[seed])]
-        train = data[~data['promotion_technical_id'].isin(self.splits[seed])]
+        test = data[data['promotion_technical_id'].isin(self.splits[str(seed)])]
+        train = data[~data['promotion_technical_id'].isin(self.splits[str(seed)])]
 
         return train, test
         
@@ -46,7 +43,7 @@ class Splitting(object):
             # Exclude products which exists only in test
             test = test[test['original_pid'].isin(train['original_pid'])]
             # Adding to splist
-            self.splits[seed] = list(test['promotion_technical_id'].unique())
+            self.splits[str(seed)] = list(test['promotion_technical_id'].unique())
             
     def __indexes_for_split(self, df, seed):
         # get indexes for part of dataset

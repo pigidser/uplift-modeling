@@ -26,6 +26,7 @@ class Model(object):
         self.filter_future_data = None
         self.account_test_filter = None
         self.test_splits = None
+        self.metrics_detailed_mape = None
         
         self.model_initialized = False
         
@@ -63,6 +64,7 @@ class Model(object):
         self.metrics_future_data = analysis.metrics_future_data
         self.account_test_filter = analysis.account_test_filter
         self.test_splits = analysis.test_splitting.splits
+        self.metrics_detailed_mape = analysis.metrics_detailed_mape
         
     def create(self, params, max_evals, target_ratio_val, feature_filename, features, target, cat_feature,
                output_dir, data_filename, filter_filename, account_filter, future_data_filename, future_target,
@@ -90,6 +92,7 @@ class Model(object):
         self.__load_future_data()
         self.__load_features()
         self.__apply_account_filter()
+        self.__filter_future_data()
         self.__set_clusters()
         # __set_params() runs before training the model
         self.__apply_duplication_map()
@@ -115,24 +118,23 @@ class Model(object):
         if not self.duplication_map is None:
             if not isinstance(self.duplication_map, dict):
                 raise Exception("The 'duplication_map' parameter type should be a dictionary")
-            print("Duplicating the data...")
+            print("Duplication map:")
             new_data = self.data.copy()
             num_added = 0
             for account in self.duplication_map.keys():
-                print("- account = {}".format(account))
                 if not account in self.clusters:
-                    print("- skipped (key {} not in clusters)".format(account))
                     continue
                 dups = self.duplication_map[account]
                 for dup in dups:
                     if dup == account:
-                        print("- skipped ({} == account)".format(dup))
                         continue
                     df = self.data[self.data['account_banner']==dup]
-                    print("- dup = {}, len = {}".format(dup, df.shape[0]))
                     df['cluster'] = account
                     new_data = pd.concat([new_data, df], axis=0)
                     num_added += df.shape[0]
+            # Pretty output
+            for key in self.duplication_map.keys():
+                print("- {}: {}".format(key, self.duplication_map[key]))
             new_data.reset_index(inplace=True, drop=True)
             print("- Initial data len: {}".format(self.data.shape[0]))
             self.data = new_data
@@ -167,37 +169,47 @@ class Model(object):
         if not os.path.isfile(self.future_data_filename):
             raise IOError, "Please specify a correct file with train dataset. File not found: " \
                 + self.future_data_filename
-        df = pd.read_msgpack(self.future_data_filename)
+        self.future_data = pd.read_msgpack(self.future_data_filename)
         
-        print("Future data filtering...")
+    def __filter_future_data(self):
+        """
+        Apply clearing filter to future dataset
         
-        mask = df['promotion_status'].isin([30, 35])
-        print("- status of promotion: {}".format(len(df[mask])))
-        df = df[~mask]
-
-        mask = ~df['original_pid'].isin(self.data['original_pid'])
-        print("- products not exist in train dataset: {}".format(len(df[mask])))
-        df = df[~mask]
-
-        mask = df['exclude_yn'].isin([1, True])
-        print("- excluded flag: {}".format(len(df[mask])))
-        df = df[~mask]
-
-        mask = df['baseline_units_2'] == 0.0
-        print("- zero planned baseline: {}".format(len(df[mask])))
-        df = df[~mask]
-
-        mask = df['total_units_2'] == 0.0
-        print("- zero planned in-store total volume: {}".format(len(df[mask])))
-        df = df[~mask]
-
-        mask = df['total_units_2'] <= df['baseline_units_2']
-        print("- planned in-store total volume lower then baseline: {}".format(len(df[mask])))
-        df = df[~mask]
+        """
+        print("Initial future data length: {}. Filtering...".format(self.future_data.shape[0]))
         
-        self.future_data = df
+        # Prepare a mask that will consolidate all mask to apply filter only once in the end
+        all_masks = np.zeros(len(self.future_data), dtype=bool)
+
+        mask = self.future_data['promotion_status'].isin([30, 35])
+        all_masks = np.add(all_masks, mask.values)
+        print("- status of promotion: {}".format(self.future_data[mask].shape[0]))
+        
+        mask = ~self.future_data['original_pid'].isin(self.data['original_pid'])
+        all_masks = np.add(all_masks, mask.values)
+        print("- products not exist in train dataset: {}".format(self.future_data[mask].shape[0]))
+        
+        mask = self.future_data['exclude_yn'].isin([1, True])
+        all_masks = np.add(all_masks, mask.values)
+        print("- excluded flag: {}".format(self.future_data[mask].shape[0]))
+        
+        mask = self.future_data['baseline_units_2'] == 0.0
+        all_masks = np.add(all_masks, mask.values)
+        print("- zero planned baseline: {}".format(self.future_data[mask].shape[0]))
+        
+        mask = self.future_data['total_units_2'] == 0.0
+        all_masks = np.add(all_masks, mask.values)
+        print("- zero planned in-store total volume: {}".format(self.future_data[mask].shape[0]))
+        
+        mask = self.future_data['total_units_2'] <= self.future_data['baseline_units_2']
+        all_masks = np.add(all_masks, mask.values)
+        print("- planned in-store total volume lower then baseline: {}".format(self.future_data[mask].shape[0]))
+        
+        self.future_data = self.future_data[~all_masks]
+        print("- New future data length: {}".format(self.future_data.shape[0]))
         
     def __load_features(self):
+        """Load features from a file"""
         if not os.path.isfile(self.feature_filename):
             raise IOError, "Please specify a correct file with the information about features. " + \
                 "File not found: " + self.feature_filename
@@ -293,6 +305,7 @@ class Model(object):
             'max_evals': self.max_evals,
             'target_ratio_val': self.target_ratio_val,
             'test_splits': self.test_splits,
+            'metrics_detailed_mape': self.metrics_detailed_mape,
         }
         with open(meta_path, 'w') as meta_file:
             json.dump(meta_data, meta_file)
@@ -345,6 +358,7 @@ class Model(object):
                 self.max_evals = meta_data.get('max_evals')
                 self.target_ratio_val = meta_data.get('target_ratio_val')
                 self.test_splits = meta_data.get('test_splits')
+                self.metrics_detailed_mape = meta_data.get('metrics_detailed_mape')
 
     def __standard_load(self):
         prediction_model = PredictionModel(self.model_name, path=self.output_dir, one_hot_encode=False)
@@ -357,6 +371,7 @@ class Model(object):
         self.__load_dataset()
         self.__load_future_data()
         self.__apply_account_filter()
+        self.__filter_future_data()
         for key in self.model.named_steps['model'].selected_features:
             self.features = self.model.named_steps['model'].selected_features[key]
             break
