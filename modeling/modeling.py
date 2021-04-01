@@ -13,6 +13,63 @@ from transforms import ClusterTransform
 from sklearn.pipeline import Pipeline
 
 class Model(object):
+    
+    """
+    # Declare a model
+    model = Model(model_name='model1')
+    
+    # Creating the model from scratch
+    ---------------------------------
+    
+    # Use existing params or None. If params defined, max_evals not used.
+    params = {0.0: {'colsample_bytree': 0.5,
+      'gamma': 0.75,
+      'learning_rate': 0.04,
+      'max_depth': 5,
+      'min_child_weight': 5.0,
+      'n_estimators': 142,
+      'reg_alpha': 0.9,
+      'reg_lambda': 1.4500000000000002,
+      'subsample': 0.55,
+      'transformer_nominal': 'JamesSteinEncoder',
+      'transformer_ordinal': 'OrdinalEncoder',
+      'under_predict_weight': 2.0}}
+
+    # Use feature set from feature_filename file or define another set
+    features = [
+        u'original_pid',
+        u'account_id',
+        u'original_product_dimension_25',
+        u'original_product_dimension_26',
+        u'week_agg_8',
+        u'baseline_units',
+        u'consumer_length',
+        u'promotion_type',
+        u'discount_perc_cohort',
+        u'promoted_niv',
+        u'previous_promotion_week_distance',
+        u'total_nr_products'
+    ]
+
+    model.create(
+        params=params,
+        max_evals=None,
+        target_ratio_val=None,
+        feature_filename='./outputs/im_feature_info_dict_mars_ru_20210212.txt',
+        features=features,
+        target='total_units',
+        cat_feature=None,
+        output_dir='outputs',
+        data_filename='../data/20210212_mars_ru_prod_trainset.msgpack',
+        filter_filename='./outputs/im_data_retrieval-v6-20210212.txt',
+        account_filter=['5Pyaterochka (X5)','Lenta','Dixy','Okey Group','Magnit'],
+        future_data_filename='../data/20210212_mars_ru_prod_futureset.msgpack',
+        future_target='total_units_2',
+        duplication_map=None)
+
+    model.train()
+
+    """
 
     def __init__(self, model_name):
         """
@@ -20,15 +77,16 @@ class Model(object):
         """
 #         self.logger = logging.getLogger('sales_support_helper_application.' + __name__)
         self.model_name = model_name
+        self.test_splits = None
+        self.evaluation_metrics = None
+        self.evaluation_future_metrics = None
+        self.account_test_filter = None
+        self.filter_threshold = None
         self.metrics_data = None
         self.metrics_future_data = None
-        self.filter_data = None
-        self.filter_future_data = None
-        self.account_test_filter = None
-        self.test_splits = None
-        self.metrics_detailed_mape = None
         
         self.model_initialized = False
+        print("Use create() or load() method to initialize the model.")
         
     def get_info(self):
         print("--- Model Information ---")
@@ -44,11 +102,13 @@ class Model(object):
         print("cat_feature : {}".format(self.cat_feature))
         print("future_data_filename : {}".format(self.future_data_filename))
         print("future_target : {}".format(self.future_target))
-        print("filter_data : {}".format('Not defined' if self.filter_data is None else 'Defined'))
-        print("filter_future_data : {}".format('Not defined' if self.filter_future_data is None else 'Defined'))
+        print("evaluation_metrics : {}".format('Not defined' if self.evaluation_metrics is None else 'Defined'))
+        print("evaluation_future_metrics : {}".format('Not defined' if self.evaluation_future_metrics is None else 'Defined'))
+        print("filter_threshold : {}".format(self.filter_threshold))
         print("metrics_data : {}".format('Not defined' if self.metrics_data is None else 'Defined'))
         print("metrics_future_data : {}".format('Not defined' if self.metrics_future_data is None else 'Defined'))
         print("account_filter : {}".format(self.account_filter))
+        print("account_test_filter : {}".format(self.account_test_filter))
         print("-------------------------")
         
     def get_duplication_info(self):
@@ -58,13 +118,13 @@ class Model(object):
         return self.data['account_banner'].unique()
 
     def update_info(self, analysis):
-        self.filter_data = analysis.filter_data
-        self.filter_future_data = analysis.filter_future_data
+        self.test_splits = analysis.test_splitting.splits
+        self.evaluation_metrics = analysis.evaluation_metrics
+        self.evaluation_future_metrics = analysis.evaluation_future_metrics
+        self.account_test_filter = analysis.account_test_filter
+        self.filter_threshold = analysis.filter_threshold
         self.metrics_data = analysis.metrics_data
         self.metrics_future_data = analysis.metrics_future_data
-        self.account_test_filter = analysis.account_test_filter
-        self.test_splits = analysis.test_splitting.splits
-        self.metrics_detailed_mape = analysis.metrics_detailed_mape
         
     def create(self, params, max_evals, target_ratio_val, feature_filename, features, target, cat_feature,
                output_dir, data_filename, filter_filename, account_filter, future_data_filename, future_target,
@@ -98,6 +158,7 @@ class Model(object):
         self.__apply_duplication_map()
         
         self.model_initialized = True
+        print("The model is created. Use AnalysisMetrics class to analyse it.")
     
     def check_status(self):
         if not self.model_initialized:
@@ -297,15 +358,15 @@ class Model(object):
             'cat_feature': self.cat_feature,
             'future_data_filename': self.future_data_filename,
             'future_target': self.future_target,
+            'filter_threshold': self.filter_threshold,
             'metrics_data': self.metrics_data,
             'metrics_future_data': self.metrics_future_data,
             'account_filter': list(self.account_filter),
-            'filter_data': self.filter_data,
-            'filter_future_data': self.filter_future_data,
             'max_evals': self.max_evals,
             'target_ratio_val': self.target_ratio_val,
             'test_splits': self.test_splits,
-            'metrics_detailed_mape': self.metrics_detailed_mape,
+            'evaluation_metrics': self.evaluation_metrics,
+            'evaluation_future_metrics': self.evaluation_future_metrics,
         }
         with open(meta_path, 'w') as meta_file:
             json.dump(meta_data, meta_file)
@@ -340,25 +401,25 @@ class Model(object):
         else:
             with open(meta_path, 'r') as meta_file:
                 meta_data = json.load(meta_file)
-                self.feature_filename=meta_data.get('feature_filename')
-                self.output_dir=meta_data.get('output_dir')
-                self.data_filename=meta_data.get('data_filename')
-                self.filter_filename=meta_data.get('filter_filename')
-                self.duplication_map=meta_data.get('duplication_map')
-                self.account_test_filter=meta_data.get('account_test_filter')
-                self.target=meta_data.get('target')
-                self.cat_feature=meta_data.get('cat_feature')
-                self.future_data_filename=meta_data.get('future_data_filename')
-                self.future_target=meta_data.get('future_target')
+                self.feature_filename = meta_data.get('feature_filename')
+                self.output_dir = meta_data.get('output_dir')
+                self.data_filename = meta_data.get('data_filename')
+                self.filter_filename = meta_data.get('filter_filename')
+                self.duplication_map = meta_data.get('duplication_map')
+                self.account_test_filter = meta_data.get('account_test_filter')
+                self.target = meta_data.get('target')
+                self.cat_feature = meta_data.get('cat_feature')
+                self.future_data_filename = meta_data.get('future_data_filename')
+                self.future_target = meta_data.get('future_target')
+                self.filter_threshold = meta_data.get('filter_threshold')
                 self.metrics_data = meta_data.get('metrics_data')
                 self.metrics_future_data = meta_data.get('metrics_future_data')
                 self.account_filter = meta_data.get('account_filter')
-                self.filter_data = meta_data.get('filter_data')
-                self.filter_future_data = meta_data.get('filter_future_data')
                 self.max_evals = meta_data.get('max_evals')
                 self.target_ratio_val = meta_data.get('target_ratio_val')
                 self.test_splits = meta_data.get('test_splits')
-                self.metrics_detailed_mape = meta_data.get('metrics_detailed_mape')
+                self.evaluation_metrics = meta_data.get('evaluation_metrics')
+                self.evaluation_future_metrics = meta_data.get('evaluation_future_metrics')
 
     def __standard_load(self):
         prediction_model = PredictionModel(self.model_name, path=self.output_dir, one_hot_encode=False)
@@ -382,4 +443,4 @@ class Model(object):
         self.__apply_duplication_map()
         
         self.model_initialized = True
-        print("The model is loaded")
+        print("The model is loaded. Use AnalysisMetrics class to analyse it.")

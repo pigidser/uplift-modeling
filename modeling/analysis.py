@@ -14,46 +14,103 @@ plt.rcParams['figure.dpi'] = 100
 
 class AnalysisMetrics(object):
     
-    def __init__(self, model, reevaluate=False, number_tests=None,
-                 use_product_filter=True, filter_threshold=300, target_ratio_test=0.20, account_test_filter=None):
+    """
+    Use AnalysisMetrics to analyze the model.
+    
+    """
+    
+    def __init__(self, model, number_tests=None, filter_threshold=None,
+                 account_test_filter=None, target_ratio_test=0.20):
+        """
+        - If the model has not been yet analysed (model.evaluation_metrics is None), evaluation of MAPE metric starts
+        with all data (historical and future). Parameter number_tests defines number of tests. For each
+        test, data randomly splits. Evaluation is needed to define filter that is used to estimate
+        credence criteria. Then the calculation of all metrics starts (accounting parameter filter_threshold).
+        - To not apply product filter set filter_threshold to 0.
+        
+        """
         self.model = model
         self.full_model = model
-        self.reevaluate = reevaluate
-        if self.model.test_splits is None:
+        print("Analysing {} model".format(self.model.model_name))
+        # If evaluation is needed
+        if not self.model.evaluation_metrics:
+            print("The model is not evaluated.")
             self.number_tests = number_tests or 10
+        elif not number_tests is None and number_tests != len(self.model.test_splits):
+            print("The model was evaluated with a different number of tests.")
+            self.model.evaluation_metrics = None
+            self.model.test_splits = None
+            self.model.filter_threshold = None
+            self.number_tests = number_tests
         else:
+            print("The model is already evaluated.")
             self.number_tests = len(self.model.test_splits)
-        self.use_product_filter = use_product_filter
-        self.filter_threshold = filter_threshold
-        self.target_ratio_test = target_ratio_test
+            self.recalculate = False
+        # If metric recalculation is needed
+        if not self.model.evaluation_metrics:
+            # Evaluation is needed, thus, recalculation too
+            self.filter_threshold = 300 if filter_threshold is None else filter_threshold
+            self.recalculate = True
+        elif not self.model.filter_threshold is None and filter_threshold is None:
+            # The model is evaluated, the new threshold is not defined
+            self.filter_threshold = self.model.filter_threshold
+            self.recalculate = False
+        elif filter_threshold == self.model.filter_threshold and not filter_threshold is None:
+            # The model is evaluated, the new threshold is the same
+            self.filter_threshold = filter_threshold
+            self.recalculate = False
+        else:
+            self.filter_threshold = 300 if filter_threshold is None else filter_threshold
+            self.recalculate = True
         self.account_test_filter = account_test_filter
+        self.target_ratio_test = target_ratio_test
         self.test_splitting = Splitting(splits=self.model.test_splits, data=self.model.data,
                                         number_tests=self.number_tests, target_ratio_test=self.target_ratio_test)
-
+        self.__get_unique_index_splits()
+        self.__evaluate_model()
         self.__initialize_filter_data()
         self.__initialize_filter_future_data()
-        self.__evaluate_model()
+        self.__calculate_model()
         
         self.overalls = self.overall_metrics()
         self.accounts = self.account_metrics()
                 
+    def __get_unique_index_splits(self):
+        # Get indexes of unique test splits
+        lines = list()
+        for key in self.test_splitting.splits.keys():
+            split = self.test_splitting.splits[key]
+            split.sort()
+            lines.append(''.join(split))
+        df = pd.DataFrame(lines)
+        df = df.drop_duplicates()
+        self.unique_index_splits = df.index
+        print("unique_index_splits: ", self.unique_index_splits)
+    
+    def __evaluate_model(self):
+        if self.model.evaluation_metrics is None:
+            print("Evaluating the model with all historical data...")
+            evaluation_metrics = self.__evaluation_metrics()
+            print("Evaluating the model with all future data...")
+            evaluation_future_metrics = self.__evaluation_future_metrics()
+            # To be stored with the model
+            self.evaluation_metrics = evaluation_metrics
+            self.evaluation_future_metrics = evaluation_future_metrics
+        else:
+            self.evaluation_metrics = self.model.evaluation_metrics
+            self.evaluation_future_metrics = self.model.evaluation_future_metrics
+            
     def __initialize_filter_data(self):
         """ Find a filter for data"""
-        
-        if self.model.filter_data is None and self.use_product_filter:
-            print("Data filter initializing...")
-            metrics = self.__mape_data_detailed()
-
-            df = self.__get_account_detailed_metrics(['mape_m'], metrics)
-            self.account_detailed_metrics = df
+        if self.filter_threshold != 0:
+            df = self.__parse_detailed_metrics(['mape_m'], self.evaluation_metrics)
             s = df.median()
-
             filts = dict()
             for i, item in enumerate(s[s > self.filter_threshold].items()):
                 f1 = item[0].find("/")
                 account = item[0][:f1 - 1]
                 f2 = item[0].find("/",f1 + 1)
-                product_25 = item[0][f1 + 1:f2 - 1]
+                product_25 = item[0][f1 + 2:f2 - 1]
                 f3 = item[0].find("/",f2 + 1)
                 product_26 = item[0][f2 + 2:f3 - 1]
                 filt = dict()
@@ -61,27 +118,21 @@ class AnalysisMetrics(object):
                 filt['original_product_dimension_25'] = product_25
                 filt['original_product_dimension_26'] = product_26
                 filts[i] = filt
-
             self.filter_data = filts
         else:
-            self.filter_data = self.model.filter_data
+            self.filter_data = None
 
     def __initialize_filter_future_data(self):
         """ Find a filter for future data"""
-        
-        if self.model.filter_future_data is None and self.use_product_filter:
-            print("Future data filter initializing...")
-            metrics = self.__mape_future_data_detailed_test()
-
-            df = self.__get_account_detailed_metrics(['mape_f_m_h'], metrics)
+        if self.filter_threshold != 0:
+            df = self.__parse_detailed_metrics(['mape_f_m_h'], self.evaluation_future_metrics)
             s = df.median()
-
             filts = dict()
             for i, item in enumerate(s[s > self.filter_threshold].items()):
                 f1 = item[0].find("/")
                 account = item[0][:f1 - 1]
                 f2 = item[0].find("/",f1 + 1)
-                product_25 = item[0][f1 + 1:f2 - 1]
+                product_25 = item[0][f1 + 2:f2 - 1]
                 f3 = item[0].find("/",f2 + 1)
                 product_26 = item[0][f2 + 2:f3 - 1]
                 filt = dict()
@@ -89,30 +140,31 @@ class AnalysisMetrics(object):
                 filt['original_product_dimension_25'] = product_25
                 filt['original_product_dimension_26'] = product_26
                 filts[i] = filt
-
             self.filter_future_data = filts
         else:
-            self.filter_future_data = self.model.filter_future_data
+            self.filter_future_data = None
             
-    def __evaluate_model(self):
+    def __calculate_model(self):
         self.metrics_data = self.model.metrics_data
         self.metrics_future_data = self.model.metrics_future_data
-        if self.model.metrics_data is None or self.reevaluate:
-            print("Evaluating the Model for historic data...")
+        if self.model.metrics_data is None or self.recalculate:
+            message = "Calulation of metrics for historical data"
+            print(message + ". No product filter defined." if self.filter_threshold == 0 \
+                  else message + " with 'MAPE' filter threshold {}.".format(self.filter_threshold))
             self.test_data()
-        if self.model.metrics_future_data is None or self.reevaluate:
-            print("Evaluating the Model for future data...")
+        if self.model.metrics_future_data is None or self.recalculate:
+            message = "Calulation of metrics for future data"
+            print(message + ". No product filter defined." if self.filter_threshold == 0 \
+                  else message + " with 'MAPE' filter threshold {}.".format(self.filter_threshold))
             self.test_future_data()
             
-    def __mape_data_detailed(self):
+    def __evaluation_metrics(self):
         metrics = list()
         for seed in range(self.number_tests):
-            metrics.append(self.__mape_data_detailed_test_split(seed))
-        # To be stored with the model
-        self.metrics_detailed_mape = metrics
+            metrics.append(self.__evaluation_metrics_test_split(seed))
         return metrics
 
-    def __mape_data_detailed_test_split(self, seed):
+    def __evaluation_metrics_test_split(self, seed):
 
         if seed % 5 == 0:
             print("Test iteration {} of {}".format(seed + 1, self.number_tests))
@@ -157,9 +209,10 @@ class AnalysisMetrics(object):
                                             (self.test['original_product_dimension_25']==product_25)] \
                                         ['original_product_dimension_26'].unique():
                     m_26 = dict()
-                    metric_dict = self.get_metrics_by_account_product25_product26(['mape_m'],
+                    metric_dict = self.__get_metrics_by_account_product25_product26(['mape_m','bias_m'],
                                                                                 account, product_25, product_26)
                     m_26['mape_m'] = metric_dict['mape_m']
+                    m_26['bias_m'] = metric_dict['bias_m']
                     m_25[product_26] = m_26
 
                 m_acc[product_25] = m_25
@@ -168,10 +221,13 @@ class AnalysisMetrics(object):
 
         return m
     
-    def __get_account_detailed_metrics(self, metric_filter, metrics):
+    def __parse_detailed_metrics(self, metric_filter, metrics):
         """Get metrics by accounts / product_25 / product_26"""
         lines = list()
-        for item in metrics:
+        for i, item in enumerate(metrics):
+            if len(metrics) > 1 and i not in self.unique_index_splits:
+                # if metrics are related to historical and split not unique
+                continue
             line = dict()
             for key_acc in item.keys():
                 if isinstance(item[key_acc], dict):
@@ -181,12 +237,11 @@ class AnalysisMetrics(object):
                                 if isinstance(item[key_acc][key_25][key_26], dict):
                                     for metric in item[key_acc][key_25][key_26].items():
                                         if metric[0] in metric_filter:
-                                            line[key_acc + ' /' + key_25 + ' / ' + key_26 + ' / ' + metric[0]] = \
+                                            line[key_acc + ' / ' + key_25 + ' / ' + key_26 + ' / ' + metric[0]] = \
                                                 item[key_acc][key_25][key_26][metric[0]]
             lines.append(line)
 
         df = pd.DataFrame(lines)
-        df = df.drop_duplicates()
         return df
 
     def test_split(self, seed):
@@ -234,7 +289,7 @@ class AnalysisMetrics(object):
         for account in self.test['account_banner'].unique():
             m_acc = dict()
 
-            metric_dict = self.get_metrics_by_account(metric_filter, account)
+            metric_dict = self.__get_metrics_by_account(metric_filter, account)
 
             m_acc['r2_m'] = metric_dict['r2_m']
             m_acc['r2_h'] = metric_dict['r2_h']
@@ -259,7 +314,7 @@ class AnalysisMetrics(object):
             m['train'] = self.train_x.shape[0]
             m['test'] = self.test_x.shape[0]
             
-            metric_dict = self.get_overall_metrics(metric_filter)
+            metric_dict = self.__get_overall_metrics(metric_filter)
             
             m['r2_m'] = metric_dict['r2_m']
             m['r2_h'] = metric_dict['r2_h']
@@ -285,7 +340,7 @@ class AnalysisMetrics(object):
             metrics.append(self.test_split(seed))
         self.metrics_data = metrics
         
-    def __mape_future_data_detailed_test(self):
+    def __evaluation_future_metrics(self):
 
         self.test = self.model.future_data.copy()
         # Apply account test filter
@@ -308,9 +363,11 @@ class AnalysisMetrics(object):
                                         ['original_product_dimension_26'].unique():
                     m_26 = dict()
                     metric_dict = \
-                        self.get_metrics_by_account_product25_product26(['mape_f_m_h'], account, product_25, product_26)
+                        self.__get_metrics_by_account_product25_product26(['mape_f_m_h','bias_f_m_h'],
+                                                                          account, product_25, product_26)
                     
                     m_26['mape_f_m_h'] = metric_dict['mape_f_m_h']
+                    m_26['bias_f_m_h'] = metric_dict['bias_f_m_h']
                     m_25[product_26] = m_26
 
                 m_acc[product_25] = m_25
@@ -340,7 +397,7 @@ class AnalysisMetrics(object):
         for account in self.test['account_banner'].unique():
             m_acc = dict()
 
-            metric_dict = self.get_metrics_by_account(metric_filter, account)
+            metric_dict = self.__get_metrics_by_account(metric_filter, account)
             
             m_acc['r2_f_m_h'] = metric_dict['r2_f_m_h']
             m_acc['wape_f_m_h'] = metric_dict['wape_f_m_h']
@@ -351,7 +408,7 @@ class AnalysisMetrics(object):
             for product_25 in self.test[self.test['account_banner']==account]['original_product_dimension_25'].unique():
                 m_25 = dict()
                 metric_dict = \
-                    self.get_metrics_by_account_product25(metric_filter, account, product_25)
+                    self.__get_metrics_by_account_product25(metric_filter, account, product_25)
                 
                 m_25['r2_f_m_h'] = metric_dict['r2_f_m_h']
                 m_25['wape_f_m_h'] = metric_dict['wape_f_m_h']
@@ -364,7 +421,7 @@ class AnalysisMetrics(object):
                                         ['original_product_dimension_26'].unique():
                     m_26 = dict()
                     metric_dict = \
-                        self.get_metrics_by_account_product25_product26(metric_filter, account, product_25, product_26)
+                        self.__get_metrics_by_account_product25_product26(metric_filter, account, product_25, product_26)
                     
                     m_26['r2_f_m_h'] = metric_dict['r2_f_m_h']
                     m_26['wape_f_m_h'] = metric_dict['wape_f_m_h']
@@ -378,7 +435,7 @@ class AnalysisMetrics(object):
             m[account] = m_acc
 
             # Overall metrics
-            metric_dict = self.get_overall_metrics(metric_filter)
+            metric_dict = self.__get_overall_metrics(metric_filter)
             
             m['r2_f_m_h'] = metric_dict['r2_f_m_h']
             m['wape_f_m_h'] = metric_dict['wape_f_m_h']
@@ -386,33 +443,26 @@ class AnalysisMetrics(object):
             m['bias_f_m_h'] = metric_dict['bias_f_m_h']
             m['sfa_f_m_h'] = metric_dict['sfa_f_m_h']
 
-        self.metrics_future_data = m
+        metrics = list()
+        metrics.append(m)
+        self.metrics_future_data = metrics
         
     def apply_product_filter(self, data, filters):
         df = data.copy()
-        if self.use_product_filter:
+        if self.filter_threshold != 0:
             for key in filters.keys():
                 df = df[~((df['account_banner']==filters[key]['account_banner']) & \
                           (df['original_product_dimension_25']==filters[key]['original_product_dimension_25']) & \
                           (df['original_product_dimension_26']==filters[key]['original_product_dimension_26']))]
         return df
 
-    def get_product_filter(self, filter='historic'):
-        if filter == 'historic':
-            filters = self.filter_data
-            print("historic filter:")
-        else:
-            filters = self.filter_future_data
-            print("future filter:")
-        for key in filters.keys():
-            print("{} / {} / {}".format(filters[key]['account_banner'],
-                                        filters[key]['original_product_dimension_25'],
-                                        filters[key]['original_product_dimension_26']))
-
     def get_historic_overall_results(self):
         # Historic Data
         lines = list()
-        for item in self.metrics_data:
+        for i, item in enumerate(self.metrics_data):
+            if i not in self.unique_index_splits:
+                # if metrics are related to split that is not unique
+                continue
             line = dict()
             line['seed'] = item['seed']
             line['train_r2'] = item['train_r2']
@@ -447,13 +497,14 @@ class AnalysisMetrics(object):
     def get_future_overall_results(self):
         # Future data
         lines = list()
-        line = dict()
-        line['Overall / r2_f_m_h'] = self.metrics_future_data['r2_f_m_h']
-        line['Overall / wape_f_m_h'] = self.metrics_future_data['wape_f_m_h']
-        line['Overall / mape_f_m_h'] = self.metrics_future_data['mape_f_m_h']
-        line['Overall / bias_f_m_h'] = self.metrics_future_data['bias_f_m_h']
-        line['Overall / sfa_f_m_h'] = self.metrics_future_data['sfa_f_m_h']
-        lines.append(line)
+        for item in self.metrics_future_data:
+            line = dict()
+            line['Overall / r2_f_m_h'] = item['r2_f_m_h']
+            line['Overall / wape_f_m_h'] = item['wape_f_m_h']
+            line['Overall / mape_f_m_h'] = item['mape_f_m_h']
+            line['Overall / bias_f_m_h'] = item['bias_f_m_h']
+            line['Overall / sfa_f_m_h'] = item['sfa_f_m_h']
+            lines.append(line)
         future_data = pd.DataFrame(lines)
         future_data = future_data[['Overall / r2_f_m_h','Overall / wape_f_m_h','Overall / mape_f_m_h',
                                    'Overall / bias_f_m_h','Overall / sfa_f_m_h']]
@@ -464,7 +515,6 @@ class AnalysisMetrics(object):
         # Historic test results
         data = self.get_historic_overall_results()
         data = data.drop('seed', axis=1)
-        data = data.drop_duplicates()
         data = data.quantile([0.5]).reset_index(drop=True)
         # Future test results
         future_data = self.get_future_overall_results()
@@ -475,7 +525,10 @@ class AnalysisMetrics(object):
     def get_historic_account_results(self):
         # Historic Data
         lines = list()
-        for item in self.metrics_data:
+        for i, item in enumerate(self.metrics_data):
+            if i not in self.unique_index_splits:
+                # if metrics are related to the split that is not unique
+                continue
             line = dict()
             for key_acc in item.keys():
                 if isinstance(item[key_acc], dict):
@@ -501,15 +554,16 @@ class AnalysisMetrics(object):
     def get_future_account_results(self):
         # Future data
         lines = list()
-        line = dict()
-        for key_acc in self.metrics_future_data.keys():
-            if isinstance(self.metrics_future_data[key_acc], dict):
-                line[key_acc + ' / r2_f_m_h'] = self.metrics_future_data[key_acc]['r2_f_m_h']
-                line[key_acc + ' / wape_f_m_h'] = self.metrics_future_data[key_acc]['wape_f_m_h']
-                line[key_acc + ' / mape_f_m_h'] = self.metrics_future_data[key_acc]['mape_f_m_h']
-                line[key_acc + ' / bias_f_m_h'] = self.metrics_future_data[key_acc]['bias_f_m_h']
-                line[key_acc + ' / sfa_f_m_h'] = self.metrics_future_data[key_acc]['sfa_f_m_h']
-        lines.append(line)
+        for item in self.metrics_future_data:
+            line = dict()
+            for key_acc in item.keys():
+                if isinstance(item[key_acc], dict):
+                    line[key_acc + ' / r2_f_m_h'] = item[key_acc]['r2_f_m_h']
+                    line[key_acc + ' / wape_f_m_h'] = item[key_acc]['wape_f_m_h']
+                    line[key_acc + ' / mape_f_m_h'] = item[key_acc]['mape_f_m_h']
+                    line[key_acc + ' / bias_f_m_h'] = item[key_acc]['bias_f_m_h']
+                    line[key_acc + ' / sfa_f_m_h'] = item[key_acc]['sfa_f_m_h']
+            lines.append(line)
         future_data = pd.DataFrame(lines)
         return future_data
 
@@ -517,7 +571,6 @@ class AnalysisMetrics(object):
         """Get metrics by accounts"""
         # Historic test results
         data = self.get_historic_account_results()
-        data = data.drop_duplicates()
         data = data.quantile([0.5]).reset_index(drop=True)
         # Future test results
         future_data = self.get_future_account_results()
@@ -630,7 +683,7 @@ class AnalysisMetrics(object):
         are penalized less than errors in minus-underpredictions."""
         return round(100 * (1. - (np.sum(np.abs(pred.squeeze() - true.squeeze())) / np.sum(pred.squeeze()))), 1)
 
-    def calculate_metrics(self, metric_filter, filter):
+    def __calculate_metrics(self, metric_filter, filter):
         if filter is not None:
             true = self.test_y.loc[filter].copy()
             pred_m = self.pred_test_y.loc[filter].copy()
@@ -666,23 +719,23 @@ class AnalysisMetrics(object):
             result[metric] = choices.get(metric, 'default')
         return result
 
-    def get_overall_metrics(self, metric_filter):
-        return self.calculate_metrics(metric_filter, filter=None)
+    def __get_overall_metrics(self, metric_filter):
+        return self.__calculate_metrics(metric_filter, filter=None)
 
-    def get_metrics_by_account(self, metric_filter, account):
+    def __get_metrics_by_account(self, metric_filter, account):
         filter = self.test['account_banner']==account
-        return self.calculate_metrics(metric_filter, filter)
+        return self.__calculate_metrics(metric_filter, filter)
 
-    def get_metrics_by_account_product25(self, metric_filter, account, product_25):
+    def __get_metrics_by_account_product25(self, metric_filter, account, product_25):
         filter = (self.test['account_banner']==account) & \
             (self.test['original_product_dimension_25']==product_25)
-        return self.calculate_metrics(metric_filter, filter)
+        return self.__calculate_metrics(metric_filter, filter)
 
-    def get_metrics_by_account_product25_product26(self, metric_filter, account, product_25, product_26):
+    def __get_metrics_by_account_product25_product26(self, metric_filter, account, product_25, product_26):
         filter = (self.test['account_banner']==account) & \
             (self.test['original_product_dimension_25']==product_25) & \
             (self.test['original_product_dimension_26']==product_26)
-        return self.calculate_metrics(metric_filter, filter)
+        return self.__calculate_metrics(metric_filter, filter)
 
     def plot_metrics(self, metric_filter=None):
         supported_metrics = list(['r2','wape','mape','bias','sfa'])
@@ -691,3 +744,34 @@ class AnalysisMetrics(object):
         for metric in metric_filter:
             if metric in supported_metrics:
                 self.plot_metric_by_clients(metric, metric.upper(), 'Median ' + metric.upper() + ' by clients and model/human')
+
+    def get_credence_criteria(self):
+        if self.filter_threshold == 0:
+            print("Product filter is not defined.")
+            return
+        print("MAPE Threshold: {}".format(self.filter_threshold))
+        print("Product groups")
+        df = pd.DataFrame(self.filter_data).T.sort_values(
+            ['account_banner','original_product_dimension_25','original_product_dimension_26'])
+        print(df.to_string())
+    
+    def get_filter_future_data(self):
+        if self.filter_threshold == 0:
+            print("Product filter is not defined.")
+            return
+        print("Future test filter for threshold {}:".format(self.filter_threshold))
+        df = pd.DataFrame(self.filter_future_data).T.sort_values(
+            ['account_banner','original_product_dimension_25','original_product_dimension_26'])
+        print(df.to_string())
+
+    def get_product_filter(self, filter='historic'):
+        if filter == 'historic':
+            filters = self.filter_data
+            print("historic filter:")
+        else:
+            filters = self.filter_future_data
+            print("future filter:")
+        for key in filters.keys():
+            print("{} / {} / {}".format(filters[key]['account_banner'],
+                                        filters[key]['original_product_dimension_25'],
+                                        filters[key]['original_product_dimension_26']))
