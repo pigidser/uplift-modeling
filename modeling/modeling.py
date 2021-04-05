@@ -81,9 +81,9 @@ class Model(object):
         self.evaluation_metrics = None
         self.evaluation_future_metrics = None
         self.account_test_filter = None
-        self.filter_threshold = None
-        self.metrics_data = None
-        self.metrics_future_data = None
+        self.confidence_threshold = None
+        self.confidence_metrics = None
+        self.confidence_future_metrics = None
         
         self.model_initialized = False
         print("Use create() or load() method to initialize the model.")
@@ -104,9 +104,9 @@ class Model(object):
         print("future_target : {}".format(self.future_target))
         print("evaluation_metrics : {}".format('Not defined' if self.evaluation_metrics is None else 'Defined'))
         print("evaluation_future_metrics : {}".format('Not defined' if self.evaluation_future_metrics is None else 'Defined'))
-        print("filter_threshold : {}".format(self.filter_threshold))
-        print("metrics_data : {}".format('Not defined' if self.metrics_data is None else 'Defined'))
-        print("metrics_future_data : {}".format('Not defined' if self.metrics_future_data is None else 'Defined'))
+        print("confidence_threshold : {}".format(self.confidence_threshold))
+        print("confidence_metrics : {}".format('Not defined' if self.confidence_metrics is None else 'Defined'))
+        print("confidence_future_metrics : {}".format('Not defined' if self.confidence_future_metrics is None else 'Defined'))
         print("account_filter : {}".format(self.account_filter))
         print("account_test_filter : {}".format(self.account_test_filter))
         print("-------------------------")
@@ -122,9 +122,9 @@ class Model(object):
         self.evaluation_metrics = analysis.evaluation_metrics
         self.evaluation_future_metrics = analysis.evaluation_future_metrics
         self.account_test_filter = analysis.account_test_filter
-        self.filter_threshold = analysis.filter_threshold
-        self.metrics_data = analysis.metrics_data
-        self.metrics_future_data = analysis.metrics_future_data
+        self.confidence_threshold = analysis.confidence_threshold
+        self.confidence_metrics = analysis.confidence_metrics
+        self.confidence_future_metrics = analysis.confidence_future_metrics
         
     def create(self, params, max_evals, target_ratio_val, feature_filename, features, target, cat_feature,
                output_dir, data_filename, filter_filename, account_filter, future_data_filename, future_target,
@@ -358,9 +358,9 @@ class Model(object):
             'cat_feature': self.cat_feature,
             'future_data_filename': self.future_data_filename,
             'future_target': self.future_target,
-            'filter_threshold': self.filter_threshold,
-            'metrics_data': self.metrics_data,
-            'metrics_future_data': self.metrics_future_data,
+            'confidence_threshold': self.confidence_threshold,
+            'confidence_metrics': self.confidence_metrics,
+            'confidence_future_metrics': self.confidence_future_metrics,
             'account_filter': list(self.account_filter),
             'max_evals': self.max_evals,
             'target_ratio_val': self.target_ratio_val,
@@ -411,9 +411,9 @@ class Model(object):
                 self.cat_feature = meta_data.get('cat_feature')
                 self.future_data_filename = meta_data.get('future_data_filename')
                 self.future_target = meta_data.get('future_target')
-                self.filter_threshold = meta_data.get('filter_threshold')
-                self.metrics_data = meta_data.get('metrics_data')
-                self.metrics_future_data = meta_data.get('metrics_future_data')
+                self.confidence_threshold = meta_data.get('confidence_threshold')
+                self.confidence_metrics = meta_data.get('confidence_metrics')
+                self.confidence_future_metrics = meta_data.get('confidence_future_metrics')
                 self.account_filter = meta_data.get('account_filter')
                 self.max_evals = meta_data.get('max_evals')
                 self.target_ratio_val = meta_data.get('target_ratio_val')
