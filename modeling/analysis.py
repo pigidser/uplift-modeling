@@ -28,43 +28,93 @@ class AnalysisMetrics(object):
         test, data randomly splits. Evaluation is needed to define filter that is used to estimate
         credence criteria. Then the calculation of all metrics starts (accounting parameter confidence_threshold).
         - To not apply product filter set confidence_threshold to 0.
+        - If number_tests is None, it will be get from the model or take 10.
+        - If confidence_threshold is None, it will be get from the model or take 300.
+        - If account_test_filter is None, it will be get from the model or take all accounts from the model.data.
         
         """
         self.model = model
         self.full_model = model
         print("Analysing {} model".format(self.model.model_name))
-        # If evaluation is needed
+        
+        # Check if evaluation is needed
+        self.reevaluate = False
+        # Check if recalculation is needed
+        self.recalculate = False
+
+        # Get parameters from the model or take the input values
+        # number_tests
+        if self.model.evaluation_metrics:
+            if len(self.model.test_splits) != 0 and isinstance(self.model.test_splits, dict):
+                self.number_tests = len(self.model.test_splits)
+                print("Model's current number tests: {}".format(self.number_tests))
+            if not number_tests is None and number_tests != self.number_tests:
+                self.number_tests = number_tests
+                print("New number tests: {}".format(self.number_tests))
+                self.reevaluate = True
+        else:
+            self.number_tests = 10 if number_tests is None else number_tests
+        # confidence_threshold
+        if self.model.evaluation_metrics:
+            if not self.model.confidence_threshold is None:
+                self.confidence_threshold = self.model.confidence_threshold
+                print("Model's current confidence threshold: {}".format(self.confidence_threshold))
+            if not confidence_threshold is None and confidence_threshold != self.confidence_threshold:
+                self.confidence_threshold = confidence_threshold
+                print("New confidence threshold: {}".format(self.confidence_threshold))
+                self.recalculate = True
+        else:
+            self.confidence_threshold = 300 if confidence_threshold is None else confidence_threshold
+        # account_test_filter
+        if self.model.evaluation_metrics:
+            if isinstance(self.model.account_test_filter, list):
+                self.account_test_filter = self.model.account_test_filter
+                print("Model's current account test filter: {}".format(self.account_test_filter))
+            if not account_test_filter is None and account_test_filter != self.account_test_filter:
+                self.account_test_filter = account_test_filter
+                print("New account test filter: {}".format(self.account_test_filter))
+                self.reevaluate = True
+        else:
+            self.account_test_filter = self.model.data['account_banner'].unique() if account_test_filter is None \
+                else account_test_filter
+        # target_ratio_test
+        if self.model.evaluation_metrics:
+            self.target_ratio_test = self.model.target_ratio_test
+            print("Model's current target ratio test: {}".format(self.target_ratio_test))
+            if not target_ratio_test is None and target_ratio_test != self.target_ratio_test:
+                self.target_ratio_test = target_ratio_test
+                print("New target ratio test: {}".format(self.target_ratio_test))
+                self.reevaluate = True
+        else:
+            self.target_ratio_test = target_ratio_test
+        
         if not self.model.evaluation_metrics:
             print("The model is not evaluated.")
-            self.number_tests = number_tests or 10
-        elif not number_tests is None and number_tests != len(self.model.test_splits):
-            print("The model was evaluated with a different number of tests.")
+            self.reevaluate = True
+        elif self.reevaluate:
+            print("The model was evaluated with different parameters.")
             self.model.evaluation_metrics = None
+            self.model.confidence_metrics = None
             self.model.test_splits = None
-            self.model.confidence_threshold = None
-            self.number_tests = number_tests
+#         elif not account_test_filter is None and account_test_filter != self.account_test_filter:
+#             print("The model was evaluated with a different account filter.")
+#             self.model.evaluation_metrics = None
+#         elif not target_ratio_test is None and target_ratio_test != self.target_ratio_test:
+#             print("The model was evaluated with a different target ratio test.")
+#             self.model.evaluation_metrics = None
         else:
             print("The model is already evaluated.")
-            self.number_tests = len(self.model.test_splits)
-            self.recalculate = False
-        # If metric recalculation is needed
-        if not self.model.evaluation_metrics:
-            # Evaluation is needed, thus, recalculation too
-            self.confidence_threshold = 300 if confidence_threshold is None else confidence_threshold
+            self.reevaluate = False
+            
+        if self.reevaluate:
+            print("Evaluation is needed, thus, recalculation is needed too")
             self.recalculate = True
-        elif not self.model.confidence_threshold is None and confidence_threshold is None:
-            # The model is evaluated, the new threshold is not defined
-            self.confidence_threshold = self.model.confidence_threshold
-            self.recalculate = False
-        elif confidence_threshold == self.model.confidence_threshold and not confidence_threshold is None:
-            # The model is evaluated, the new threshold is the same
-            self.confidence_threshold = confidence_threshold
-            self.recalculate = False
+        elif self.recalculate:
+            print("The model is evaluated, the new threshold is defined")
         else:
-            self.confidence_threshold = 300 if confidence_threshold is None else confidence_threshold
-            self.recalculate = True
-        self.account_test_filter = account_test_filter
-        self.target_ratio_test = target_ratio_test
+            print("Recalculation is not needed")
+            self.recalculate = False
+            
         self.test_splitting = Splitting(splits=self.model.test_splits, data=self.model.data,
                                         number_tests=self.number_tests, target_ratio_test=self.target_ratio_test)
         self.__get_unique_index_splits()
@@ -73,9 +123,23 @@ class AnalysisMetrics(object):
         self.__initialize_confidence_future_filter()
         self.__calculate_model()
         
-        self.overalls = self.overall_metrics()
-        self.accounts = self.account_metrics()
-                
+        self.evaluation_overalls = self.__overall_metrics('evaluation')
+        self.evaluation_accounts = self.__account_metrics('evaluation')
+        self.confidence_overalls = self.__overall_metrics('confidence')
+        self.confidence_accounts = self.__account_metrics('confidence')
+        
+        self.__update_model()
+        
+    def __update_model(self):
+        self.model.test_splits = self.test_splitting.splits
+        self.model.evaluation_metrics = self.evaluation_metrics
+        self.model.evaluation_future_metrics = self.evaluation_future_metrics
+        self.model.account_test_filter = self.account_test_filter
+        self.model.confidence_threshold = self.confidence_threshold
+        self.model.confidence_metrics = self.confidence_metrics
+        self.model.confidence_future_metrics = self.confidence_future_metrics
+        self.model.target_ratio_test = self.target_ratio_test
+
     def __get_unique_index_splits(self):
         # Get indexes of unique test splits
         lines = list()
@@ -86,17 +150,14 @@ class AnalysisMetrics(object):
         df = pd.DataFrame(lines)
         df = df.drop_duplicates()
         self.unique_index_splits = df.index
-        print("unique_index_splits: ", self.unique_index_splits)
+        print("Total unique index splits: {}".format(len(self.unique_index_splits)))
     
     def __evaluate_model(self):
-        if self.model.evaluation_metrics is None:
+        if self.reevaluate:
             print("Evaluating the model with all historical data...")
-            evaluation_metrics = self.__evaluation_metrics()
+            self.__evaluation_metrics()
             print("Evaluating the model with all future data...")
-            evaluation_future_metrics = self.__evaluation_future_metrics()
-            # To be stored with the model
-            self.evaluation_metrics = evaluation_metrics
-            self.evaluation_future_metrics = evaluation_future_metrics
+            self.__evaluation_future_metrics()
         else:
             self.evaluation_metrics = self.model.evaluation_metrics
             self.evaluation_future_metrics = self.model.evaluation_future_metrics
@@ -142,78 +203,33 @@ class AnalysisMetrics(object):
             message = "Calulation of metrics for historical data"
             print(message + ". No confidence threshold defined." if self.confidence_threshold == 0 \
                   else message + " with 'MAPE' confidence threshold {}.".format(self.confidence_threshold))
-            self.test_data()
+            self.__confidence_metrics()
         if self.model.confidence_future_metrics is None or self.recalculate:
             message = "Calulation of metrics for future data"
             print(message + ". No confidence threshold defined." if self.confidence_threshold == 0 \
                   else message + " with 'MAPE' confidence threshold {}.".format(self.confidence_threshold))
-            self.test_future_data()
+            self.__confidence_future_metrics()
             
     def __evaluation_metrics(self):
         metrics = list()
         for seed in range(self.number_tests):
-            metrics.append(self.__evaluation_metrics_test_split(seed))
-        return metrics
+            metrics.append(self.__metrics_split(seed, apply_confidence_filter=False))
+        self.evaluation_metrics = metrics
 
-    def __evaluation_metrics_test_split(self, seed):
-
-        if seed % 5 == 0:
-            print("Test iteration {} of {}".format(seed + 1, self.number_tests))
-        
-        self.train, self.test = self.test_splitting.get_split(seed, self.model.data)
-        
-        # Remove duped rows (possibly duplication has been provided)
-        self.test = self.test.drop('cluster', axis=1).drop_duplicates()
-
-        # Apply account test filter
-        if not self.account_test_filter is None:
-            self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
-        
-        self.train_x = self.train.loc[:, self.train.columns != self.model.target]
-        self.train_y = self.train.loc[:, self.train.columns == self.model.target]
-
-        self.test_x = self.test.loc[:, self.test.columns != self.model.target]
-    #         test_x['baseline_units_original'] = test_x['baseline_units']
-    #         test_x['baseline_units'] = test_x['baseline_units_2']
-        self.test_y = self.test.loc[:, self.test.columns == self.model.target]
-
-        # transform to Series
-        self.train_y = self.train_y.squeeze()
-        self.test_y = self.test_y.squeeze()
-
-        # Train model and validate performance
-        with suppress_stdout():
-            self.model.model.fit(self.train_x, self.train_y)
-
-        self.pred_train_y = self.model.model.predict(self.train_x)
-        self.pred_test_y = self.model.model.predict(self.test_x)
-
-        m = dict()
-
-        for account in self.test['account_banner'].unique():
-            m_acc = dict()
-
-            for product_25 in self.test[self.test['account_banner']==account]['original_product_dimension_25'].unique():
-                m_25 = dict()
-
-                for product_26 in self.test[(self.test['account_banner']==account) & \
-                                            (self.test['original_product_dimension_25']==product_25)] \
-                                        ['original_product_dimension_26'].unique():
-                    m_26 = dict()
-                    metric_dict = self.__get_metrics_by_account_product25_product26(['mape_m','bias_m','mape_h','bias_h'],
-                                                                                    account, product_25, product_26)
-                    m_26['mape_m'] = metric_dict['mape_m']
-                    m_26['bias_m'] = metric_dict['bias_m']
-                    m_26['mape_h'] = metric_dict['mape_h']
-                    m_26['bias_h'] = metric_dict['bias_h']
-                    m_25[product_26] = m_26
-
-                m_acc[product_25] = m_25
-
-            m[account] = m_acc
-
-        return m
+    def __evaluation_future_metrics(self):
+        metrics = self.__future_metrics_split(apply_confidence_filter=False)
+        self.evaluation_future_metrics = metrics
     
+    def __confidence_metrics(self):
+        metrics = list()
+        for seed in range(self.number_tests):
+            metrics.append(self.__metrics_split(seed, apply_confidence_filter=True))
+        self.confidence_metrics = metrics
+
+    def __confidence_future_metrics(self):
+        metrics = self.__future_metrics_split(apply_confidence_filter=True)
+        self.confidence_future_metrics = metrics
+        
     def __parse_detailed_metrics(self, metric_filter, metrics):
         
         """
@@ -222,7 +238,7 @@ class AnalysisMetrics(object):
         Parameters:
         -----------
         metric_filter: list of metric names (e.g. ['bias_m','mape_m'])
-        metrics: dictionary, can be evaluation_metrics or confidence_metrics.
+        metrics: dictionary, can be evaluation_metrics only
         
         Output: DataFrame, columns: ['account_banner','original_product_dimension_25','original_product_dimension_26']
                                 plus metric_filter
@@ -250,7 +266,7 @@ class AnalysisMetrics(object):
         df.columns = ['account_banner','original_product_dimension_25','original_product_dimension_26'] + metric_filter
         return df
 
-    def test_split(self, seed):
+    def __metrics_split(self, seed, apply_confidence_filter):
 
         if seed % 5 == 0:
             print("Test iteration {} of {}".format(seed + 1, self.number_tests))
@@ -264,8 +280,9 @@ class AnalysisMetrics(object):
         if not self.account_test_filter is None:
             self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
 
-        # Exclude products with large mape metric from test
-        self.test = self.apply_product_filter(self.test, self.confidence_filter)
+        if apply_confidence_filter:
+            # Exclude products with large mape metric from test
+            self.test = self.__apply_confidence_filter(self.test, self.confidence_filter)
     
         # train in train_set and check the results in test set
         # split data into X, Y
@@ -292,8 +309,29 @@ class AnalysisMetrics(object):
         metric_filter = ['r2_m', 'r2_h', 'r2_m_h', 'wape_m', 'wape_h', 'wape_m_h', 'mape_m', 'mape_h', 'mape_m_h', \
                          'bias_m', 'bias_h', 'bias_m_h', 'sfa_m', 'sfa_h', 'sfa_m_h']
         
+        # Account metrics
         for account in self.test['account_banner'].unique():
             m_acc = dict()
+            
+            if not apply_confidence_filter:
+                # Performs only for evaluation model.
+                # Get detailed metrics for a restricted set of metrics.
+                for product_25 in self.test[self.test['account_banner']==account]['original_product_dimension_25'].unique():
+                    m_25 = dict()
+
+                    for product_26 in self.test[(self.test['account_banner']==account) & \
+                                                (self.test['original_product_dimension_25']==product_25)] \
+                                            ['original_product_dimension_26'].unique():
+                        m_26 = dict()
+                        metric_dict = self.__get_metrics_by_account_product25_product26(['mape_m','bias_m','mape_h','bias_h'],
+                                                                                        account, product_25, product_26)
+                        m_26['mape_m'] = metric_dict['mape_m']
+                        m_26['bias_m'] = metric_dict['bias_m']
+                        m_26['mape_h'] = metric_dict['mape_h']
+                        m_26['bias_h'] = metric_dict['bias_h']
+                        m_25[product_26] = m_26
+
+                    m_acc[product_25] = m_25
 
             metric_dict = self.__get_metrics_by_account(metric_filter, account)
 
@@ -314,86 +352,41 @@ class AnalysisMetrics(object):
             m_acc['sfa__m_h'] = metric_dict['sfa_m_h']
             m[account] = m_acc
 
-            # Overall metrics
-            m['seed'] = seed
-            m['train_r2'] = round(r2_score(self.train_y, self.pred_train_y), 2)
-            m['train'] = self.train_x.shape[0]
-            m['test'] = self.test_x.shape[0]
+        # Overall metrics
+        m['seed'] = seed
+        m['train_r2'] = round(r2_score(self.train_y, self.pred_train_y), 2)
+        m['train'] = self.train_x.shape[0]
+        m['test'] = self.test_x.shape[0]
             
-            metric_dict = self.__get_overall_metrics(metric_filter)
-            
-            m['r2_m'] = metric_dict['r2_m']
-            m['r2_h'] = metric_dict['r2_h']
-            m['r2__m_h'] = metric_dict['r2_m_h']
-            m['wape_m'] = metric_dict['wape_m']
-            m['wape_h'] = metric_dict['wape_h']
-            m['wape__m_h'] = metric_dict['wape_m_h']
-            m['mape_m'] = metric_dict['mape_m']
-            m['mape_h'] = metric_dict['mape_h']    
-            m['mape__m_h'] = metric_dict['mape_m_h']    
-            m['bias_m'] = metric_dict['bias_m']
-            m['bias_h'] = metric_dict['bias_h']
-            m['bias__m_h'] = metric_dict['bias_m_h']
-            m['sfa_m'] = metric_dict['sfa_m']
-            m['sfa_h'] = metric_dict['sfa_h']
-            m['sfa__m_h'] = metric_dict['sfa_m_h']
+        metric_dict = self.__get_overall_metrics(metric_filter)
+
+        m['r2_m'] = metric_dict['r2_m']
+        m['r2_h'] = metric_dict['r2_h']
+        m['r2__m_h'] = metric_dict['r2_m_h']
+        m['wape_m'] = metric_dict['wape_m']
+        m['wape_h'] = metric_dict['wape_h']
+        m['wape__m_h'] = metric_dict['wape_m_h']
+        m['mape_m'] = metric_dict['mape_m']
+        m['mape_h'] = metric_dict['mape_h']    
+        m['mape__m_h'] = metric_dict['mape_m_h']    
+        m['bias_m'] = metric_dict['bias_m']
+        m['bias_h'] = metric_dict['bias_h']
+        m['bias__m_h'] = metric_dict['bias_m_h']
+        m['sfa_m'] = metric_dict['sfa_m']
+        m['sfa_h'] = metric_dict['sfa_h']
+        m['sfa__m_h'] = metric_dict['sfa_m_h']
 
         return m
 
-    def test_data(self):
-        
-        metrics = list()
-        for seed in range(self.number_tests):
-            metrics.append(self.test_split(seed))
-        self.confidence_metrics = metrics
-        
-    def __evaluation_future_metrics(self):
-
-        self.test = self.model.future_data.copy()
-        # Apply account test filter
-        if not self.account_test_filter is None:
-            self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
-        self.test_x = self.test.loc[:, self.test.columns != self.model.future_target]
-        self.test_y = self.test.loc[:, self.test.columns == self.model.future_target]
-        self.pred_test_y = self.full_model.model.predict(self.test_x)
-
-        m = dict()
-
-        for account in self.test['account_banner'].unique():
-            m_acc = dict()
-
-            for product_25 in self.test[self.test['account_banner']==account]['original_product_dimension_25'].unique():
-                m_25 = dict()
-
-                for product_26 in self.test[(self.test['account_banner']==account) & \
-                                            (self.test['original_product_dimension_25']==product_25)] \
-                                        ['original_product_dimension_26'].unique():
-                    m_26 = dict()
-                    metric_dict = \
-                        self.__get_metrics_by_account_product25_product26(['mape_f_m_h','bias_f_m_h'],
-                                                                          account, product_25, product_26)
-                    
-                    m_26['mape_f_m_h'] = metric_dict['mape_f_m_h']
-                    m_26['bias_f_m_h'] = metric_dict['bias_f_m_h']
-                    m_25[product_26] = m_26
-
-                m_acc[product_25] = m_25
-
-            m[account] = m_acc
-            
-        metrics = list()
-        metrics.append(m)
-
-        return metrics
-    
-    def test_future_data(self):
+    def __future_metrics_split(self, apply_confidence_filter):
 
         self.test = self.model.future_data.copy()
         # Apply account test filter
         if not self.account_test_filter is None:
             self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
         # Apply product test filter
-        self.test = self.apply_product_filter(self.test, self.filter_future_data)
+        if apply_confidence_filter:
+            self.test = self.__apply_confidence_filter(self.test, self.filter_future_data)
         self.test_x = self.test.loc[:, self.test.columns != self.model.future_target]
         self.test_y = self.test.loc[:, self.test.columns == self.model.future_target]
         self.pred_test_y = self.full_model.model.predict(self.test_x)
@@ -452,9 +445,9 @@ class AnalysisMetrics(object):
 
         metrics = list()
         metrics.append(m)
-        self.confidence_future_metrics = metrics
-        
-    def apply_product_filter(self, data, filters):
+        return metrics
+    
+    def __apply_confidence_filter(self, data, filters):
         df = data.copy()
         if self.confidence_threshold != 0:
             for key in filters.keys():
@@ -463,10 +456,10 @@ class AnalysisMetrics(object):
                           (df['original_product_dimension_26']==filters[key]['original_product_dimension_26']))]
         return df
 
-    def get_historic_overall_results(self):
+    def __historic_overall_metrics(self, metrics):
         # Historic Data
         lines = list()
-        for i, item in enumerate(self.confidence_metrics):
+        for i, item in enumerate(metrics):
             if i not in self.unique_index_splits:
                 # if metrics are related to split that is not unique
                 continue
@@ -501,10 +494,10 @@ class AnalysisMetrics(object):
                      'Overall / sfa_m','Overall / sfa_h','Overall / sfa__m_h',]]
         return data
     
-    def get_future_overall_results(self):
+    def __future_overall_metrics(self, future_metrics):
         # Future data
         lines = list()
-        for item in self.confidence_future_metrics:
+        for item in future_metrics:
             line = dict()
             line['Overall / r2_f_m_h'] = item['r2_f_m_h']
             line['Overall / wape_f_m_h'] = item['wape_f_m_h']
@@ -517,22 +510,31 @@ class AnalysisMetrics(object):
                                    'Overall / bias_f_m_h','Overall / sfa_f_m_h']]
         return future_data
     
-    def overall_metrics(self):
+    def __overall_metrics(self, metric_type):
         """Get overall metrics"""
-        # Historic test results
-        data = self.get_historic_overall_results()
+        if metric_type not in ['evaluation','confidence']:
+            metric_type = 'evaluation'
+        # Select metrics
+        if metric_type == 'evaluation':
+            metrics = self.evaluation_metrics
+            future_metrics = self.evaluation_future_metrics
+        else:
+            metrics = self.confidence_metrics
+            future_metrics = self.confidence_future_metrics
+        # Historic test results            
+        data = self.__historic_overall_metrics(metrics)
         data = data.drop('seed', axis=1)
         data = data.quantile([0.5]).reset_index(drop=True)
         # Future test results
-        future_data = self.get_future_overall_results()
+        future_data = self.__future_overall_metrics(future_metrics)
         # Merge historic and future test results
         df = pd.concat([data, future_data], axis=1)
         return df
     
-    def get_historic_account_results(self):
+    def __historic_account_metrics(self, metrics):
         # Historic Data
         lines = list()
-        for i, item in enumerate(self.confidence_metrics):
+        for i, item in enumerate(metrics):
             if i not in self.unique_index_splits:
                 # if metrics are related to the split that is not unique
                 continue
@@ -558,10 +560,10 @@ class AnalysisMetrics(object):
         data = pd.DataFrame(lines)
         return data
         
-    def get_future_account_results(self):
+    def __future_account_metrics(self, future_metrics):
         # Future data
         lines = list()
-        for item in self.confidence_future_metrics:
+        for item in future_metrics:
             line = dict()
             for key_acc in item.keys():
                 if isinstance(item[key_acc], dict):
@@ -574,13 +576,22 @@ class AnalysisMetrics(object):
         future_data = pd.DataFrame(lines)
         return future_data
 
-    def account_metrics(self):
+    def __account_metrics(self, metric_type):
         """Get metrics by accounts"""
+        if metric_type not in ['evaluation','confidence']:
+            metric_type = 'evaluation'
+        # Select metrics
+        if metric_type == 'evaluation':
+            metrics = self.evaluation_metrics
+            future_metrics = self.evaluation_future_metrics
+        else:
+            metrics = self.confidence_metrics
+            future_metrics = self.confidence_future_metrics
         # Historic test results
-        data = self.get_historic_account_results()
+        data = self.__historic_account_metrics(metrics)
         data = data.quantile([0.5]).reset_index(drop=True)
         # Future test results
-        future_data = self.get_future_account_results()
+        future_data = self.__future_account_metrics(future_metrics)
         # Merge historic and future data
         df = pd.concat([data, future_data], axis=1)
         return df
@@ -604,76 +615,7 @@ class AnalysisMetrics(object):
                 columns.append(column)
         return df[columns].quantile([0.25,0.5,0.75], axis=0)
     
-    
-    def plot_metric_by_clients(self, metric_name, ylabel, title):
-        
-        plt.rcParams['figure.figsize'] = [10, 6]
-        plt.rcParams['figure.dpi'] = 100
-        plt.rcParams["font.size"] = "8"
 
-        df = pd.concat([self.overalls, self.accounts], axis=1)
-        
-        columns_m = list()
-        columns_h = list()
-        columns_m_h = list()
-        columns_f_m_h = list()
-        labels = list()
-        for column in df.columns:
-            if metric_name + '_m' in column:
-                columns_m.append(column)
-                labels.append(column[:-len(metric_name)-4])
-            elif metric_name + '_h' in column:
-                columns_h.append(column)
-            elif metric_name + '__m' in column:
-                columns_m_h.append(column)
-            elif metric_name + '_f_m' in column:
-                columns_f_m_h.append(column)
-
-        df_m = df[columns_m]
-        df_h = df[columns_h]
-        df_m_h = df[columns_m_h]
-        df_f_m_h = df[columns_f_m_h]
-
-        model = df_m.squeeze().values
-        human = df_h.squeeze().values
-        model_human = df_m_h.squeeze().values
-        future_model_human = df_f_m_h.squeeze().values
-        
-        x = np.arange(len(labels))  # the label locations
-        width = 0.22  # the width of the bars
-
-        fig, ax = plt.subplots()
-        rects1 = ax.bar(x - width - width/2, model, width, label='Model vs Fact')
-        rects2 = ax.bar(x - width/2, human, width, label='Human vs Fact')
-        rects3 = ax.bar(x + width/2, model_human, width, label='Model vs Human (Historic)')
-        rects4 = ax.bar(x + width + width/2, future_model_human, width, label='Model vs Human (Future)')
-
-        # Add some text for labels, title and custom x-axis tick labels, etc.
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels)
-        ax.legend()
-        plt.xticks(rotation = 45)
-
-        def autolabel(rects):
-            """Attach a text label above each bar in *rects*, displaying its height."""
-            for rect in rects:
-                height = rect.get_height()
-                ax.annotate('{}'.format(height),
-                            xy=(rect.get_x() + rect.get_width() / 2, height),
-                            xytext=(0, 3),  # 3 points vertical offset
-                            textcoords="offset points",
-                            ha='center', va='bottom')
-
-        autolabel(rects1)
-        autolabel(rects2)
-        autolabel(rects3)
-        autolabel(rects4)
-
-        fig.tight_layout()
-
-        plt.show()
         
     def wape_score(self, true, pred):
         """ Weighted absolute percent error """
@@ -744,14 +686,6 @@ class AnalysisMetrics(object):
             (self.test['original_product_dimension_26']==product_26)
         return self.__calculate_metrics(metric_filter, filter)
 
-    def plot_metrics(self, metric_filter=None):
-        supported_metrics = list(['r2','wape','mape','bias','sfa'])
-        if metric_filter is None:
-            metric_filter = supported_metrics
-        for metric in metric_filter:
-            if metric in supported_metrics:
-                self.plot_metric_by_clients(metric, metric.upper(), 'Median ' + metric.upper() + ' by clients and model/human')
-
     def confidence_criteria(self):
         """
         Save Model Confidence Criteria report.
@@ -780,7 +714,7 @@ class AnalysisMetrics(object):
                 df_p = df[df['Account']==account].sort_values(sort_columns).reset_index(drop=True)
                 df_p.to_excel(writer, sheet_name=account)
                                    
-        print("Model Confedence Criteria report is saved to {}".format(report_name))
+        print("Model Confidence Criteria report is saved to {}".format(report_name))
     
     def get_filter_future_data(self):
         if self.confidence_threshold == 0:
@@ -803,13 +737,101 @@ class AnalysisMetrics(object):
                                         filters[key]['original_product_dimension_25'],
                                         filters[key]['original_product_dimension_26']))
             
-    def plot_confidence_report(self, metric_name, ylabel, title):
+    def __get_supported_metrics(self, metric_filter):
+        supported_metrics = list(['r2','wape','mape','bias','sfa'])
+        if metric_filter is None or not isinstance(metric_filter, list):
+            cleared_metic_filter = supported_metrics
+        else:
+            cleared_metic_filter = [x for x in metric_filter if x in supported_metrics]
+            if len(cleared_metic_filter) == 0:
+                cleared_metic_filter = supported_metrics
+        return cleared_metic_filter
+            
+    def plot_confidence_comparison(self, metric_filter=None):
+        metric_filter = self.__get_supported_metrics(metric_filter)
+        for metric in metric_filter:
+            self.__plot_confidence_comparison(metric)
+
+    def __plot_confidence_comparison(self, metric):
+
+        plt.rcParams['figure.figsize'] = [12, 4]
+        plt.rcParams['figure.dpi'] = 100
+        plt.rcParams["font.size"] = "8"
+        
+        ylabel = metric.upper()
+
+        def autolabel(ax, rects):
+            """Attach a text label above each bar in *rects*, displaying its height."""
+            for rect in rects:
+                height = rect.get_height()
+                ax.annotate('{}'.format(height),
+                            xy=(rect.get_x() + rect.get_width() / 2, height),
+                            xytext=(0, 3),  # 3 points vertical offset
+                            textcoords="offset points",
+                            ha='center', va='bottom')
+
+        def figure(ax, metric_type, metric, ylabel, title):
+            if metric_type == 'evaluation':
+                df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
+            elif metric_type == 'confidence':
+                df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
+
+            columns_m, columns_h, labels = list(), list(), list()
+            for column in df.columns:
+                if metric + '_m' in column:
+                    columns_m.append(column)
+                    labels.append(column[:-len(metric)-4])
+                elif metric + '_h' in column:
+                    columns_h.append(column)
+
+            model = df[columns_m].squeeze().values
+            human = df[columns_h].squeeze().values
+            x = np.arange(len(labels))  # the label locations
+            width = 0.35  # the width of the bars
+            rects1 = ax.bar(x - width/2, model, width, label='Model vs Fact')
+            rects2 = ax.bar(x + width/2, human, width, label='Human vs Fact')
+
+            autolabel(ax, rects1)
+            autolabel(ax, rects2)
+
+            # Add some text for labels, title and custom x-axis tick labels, etc.
+            ax.set_ylabel(ylabel)
+            ax.set_title(title)
+            ax.set_xticks(x)
+            ax.set_xticklabels(labels)
+            ax.tick_params(axis='x', rotation=45)
+            ax.legend()
+
+        fig, axs = plt.subplots(1,2)
+        plt.tight_layout() 
+
+        title = "Median {} (all product groups)".format(ylabel)
+        figure(axs[0], 'evaluation', metric, ylabel, title=title)
+        
+        title = "Median {} (confident product groups, MAPE threshold={}".format(ylabel, self.confidence_threshold)
+        figure(axs[1], 'confidence', metric, ylabel, title=title)
+
+        plt.show()
+        
+    def plot_performance_metrics(self, metric_type, metric_filter=None):
+        metric_filter = self.__get_supported_metrics(metric_filter)
+        for metric in metric_filter:
+            self.__plot_performance_metric(metric_type, metric)
+
+    def __plot_performance_metric(self, metric_type, metric):
         
         plt.rcParams['figure.figsize'] = [10, 6]
         plt.rcParams['figure.dpi'] = 100
         plt.rcParams["font.size"] = "8"
 
-        df = pd.concat([self.overalls, self.accounts], axis=1)
+        ylabel = metric.upper()
+        
+        if metric_type == 'evaluation':
+            df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
+            title = 'Median ' + ylabel + ' (all product groups)'
+        elif metric_type == 'confidence':
+            df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
+            title = 'Median ' + ylabel + ' (confident product groups)'
         
         columns_m = list()
         columns_h = list()
@@ -817,14 +839,14 @@ class AnalysisMetrics(object):
         columns_f_m_h = list()
         labels = list()
         for column in df.columns:
-            if metric_name + '_m' in column:
+            if metric + '_m' in column:
                 columns_m.append(column)
-                labels.append(column[:-len(metric_name)-4])
-            elif metric_name + '_h' in column:
+                labels.append(column[:-len(metric)-4])
+            elif metric + '_h' in column:
                 columns_h.append(column)
-            elif metric_name + '__m' in column:
+            elif metric + '__m' in column:
                 columns_m_h.append(column)
-            elif metric_name + '_f_m' in column:
+            elif metric + '_f_m' in column:
                 columns_f_m_h.append(column)
 
         df_m = df[columns_m]
@@ -872,3 +894,67 @@ class AnalysisMetrics(object):
         fig.tight_layout()
 
         plt.show()
+        
+    def plot_confidence_comparison_account(self):
+        for account in self.account_test_filter:
+            self.__plot_confidence_comparison_account(account)
+            
+    def __plot_confidence_comparison_account(self, account):
+
+        plt.rcParams['figure.figsize'] = [5, 4]
+        plt.rcParams['figure.dpi'] = 100
+        plt.rcParams["font.size"] = "8"
+
+        title = account
+
+        def autolabel(ax, rects):
+            """Attach a text label above each bar in *rects*, displaying its height."""
+            for rect in rects:
+                height = rect.get_height()
+                ax.annotate('{}'.format(height),
+                            xy=(rect.get_x() + rect.get_width() / 2, height),
+                            xytext=(0, 3),  # 3 points vertical offset
+                            textcoords="offset points",
+                            ha='center', va='bottom')
+
+        fig, ax = plt.subplots()
+        plt.tight_layout()
+
+        df_e = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
+        df_c = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
+
+        columns_e, columns_c, labels = list(), list(), list()
+        metric_filter = ['r2_m','wape_m','mape_m','bias_m','sfa_m']
+        for column in df_e.columns:
+            if account in column:
+                for metric in metric_filter:
+                    if column[-len(metric):] == metric:
+                        columns_e.append(column)
+                        labels.append(metric)
+        for column in df_c.columns:
+            if account in column:
+                for metric in metric_filter:
+                    if column[-len(metric):] == metric:
+                        columns_c.append(column)
+
+        evaluation = df_e[columns_e].squeeze().values
+        confidence = df_c[columns_c].squeeze().values
+        x = np.arange(len(labels))  # the label locations
+        width = 0.35  # the width of the bars
+        rects1 = ax.bar(x - width/2, evaluation, width, label='All products')
+        rects2 = ax.bar(x + width/2, confidence, width,
+                        label='Confident products, MAPE < ' + str(self.confidence_threshold))
+
+        autolabel(ax, rects1)
+        autolabel(ax, rects2)
+
+        # Add some text for labels, title and custom x-axis tick labels, etc.
+    #     ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.tick_params(axis='x', rotation=45)
+        ax.legend()
+
+        plt.show()
+

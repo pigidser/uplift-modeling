@@ -84,6 +84,7 @@ class Model(object):
         self.confidence_threshold = None
         self.confidence_metrics = None
         self.confidence_future_metrics = None
+        self.target_ratio_test = None
         
         self.model_initialized = False
         print("Use create() or load() method to initialize the model.")
@@ -353,7 +354,7 @@ class Model(object):
             'data_filename': self.data_filename,
             'filter_filename': self.filter_filename,
             'duplication_map': self.duplication_map,
-            'account_test_filter': self.account_test_filter,
+            'account_test_filter': list(self.account_test_filter),
             'target': self.target,
             'cat_feature': self.cat_feature,
             'future_data_filename': self.future_data_filename,
@@ -364,6 +365,7 @@ class Model(object):
             'account_filter': list(self.account_filter),
             'max_evals': self.max_evals,
             'target_ratio_val': self.target_ratio_val,
+            'target_ratio_test': self.target_ratio_test,
             'test_splits': self.test_splits,
             'evaluation_metrics': self.evaluation_metrics,
             'evaluation_future_metrics': self.evaluation_future_metrics,
@@ -417,6 +419,7 @@ class Model(object):
                 self.account_filter = meta_data.get('account_filter')
                 self.max_evals = meta_data.get('max_evals')
                 self.target_ratio_val = meta_data.get('target_ratio_val')
+                self.target_ratio_test = meta_data.get('target_ratio_test')
                 self.test_splits = meta_data.get('test_splits')
                 self.evaluation_metrics = meta_data.get('evaluation_metrics')
                 self.evaluation_future_metrics = meta_data.get('evaluation_future_metrics')
