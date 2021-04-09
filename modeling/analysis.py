@@ -33,8 +33,12 @@ class AnalysisMetrics(object):
         - If account_test_filter is None, it will be get from the model or take all accounts from the model.data.
         
         """
+        if not model.model_trained:
+            raise Exception("The model is not trained.")
         self.model = model
         self.full_model = model
+        
+        self.show_tips = self.model.show_tips
         print("Analysing {} model".format(self.model.model_name))
         
         # Check if evaluation is needed
@@ -96,12 +100,6 @@ class AnalysisMetrics(object):
             self.model.evaluation_metrics = None
             self.model.confidence_metrics = None
             self.model.test_splits = None
-#         elif not account_test_filter is None and account_test_filter != self.account_test_filter:
-#             print("The model was evaluated with a different account filter.")
-#             self.model.evaluation_metrics = None
-#         elif not target_ratio_test is None and target_ratio_test != self.target_ratio_test:
-#             print("The model was evaluated with a different target ratio test.")
-#             self.model.evaluation_metrics = None
         else:
             print("The model is already evaluated.")
             self.reevaluate = False
@@ -114,7 +112,7 @@ class AnalysisMetrics(object):
         else:
             print("Recalculation is not needed")
             self.recalculate = False
-            
+                    
         self.test_splitting = Splitting(splits=self.model.test_splits, data=self.model.data,
                                         number_tests=self.number_tests, target_ratio_test=self.target_ratio_test)
         self.__get_unique_index_splits()
@@ -129,6 +127,7 @@ class AnalysisMetrics(object):
         self.confidence_accounts = self.__account_metrics('confidence')
         
         self.__update_model()
+        self.__tips_useful_methods()
         
     def __update_model(self):
         self.model.test_splits = self.test_splitting.splits
@@ -795,6 +794,7 @@ class AnalysisMetrics(object):
             autolabel(ax, rects2)
 
             # Add some text for labels, title and custom x-axis tick labels, etc.
+#             ax.set_ylim(0, 1)
             ax.set_ylabel(ylabel)
             ax.set_title(title)
             ax.set_xticks(x)
@@ -813,7 +813,7 @@ class AnalysisMetrics(object):
 
         plt.show()
         
-    def plot_performance_metrics(self, metric_type, metric_filter=None):
+    def plot_performance_metrics(self, metric_type='evaluation', metric_filter=None):
         metric_filter = self.__get_supported_metrics(metric_filter)
         for metric in metric_filter:
             self.__plot_performance_metric(metric_type, metric)
@@ -957,4 +957,154 @@ class AnalysisMetrics(object):
         ax.legend()
 
         plt.show()
+        
+        
+    def plot_performance_metrics_historic(self, metric_type='evaluation', metric_filter=None):
+        metric_filter = self.__get_supported_metrics(metric_filter)
+        for metric in metric_filter:
+            self.__plot_performance_metrics_historic(metric_type, metric)
 
+    def __plot_performance_metrics_historic(self, metric_type, metric):
+        
+        plt.rcParams['figure.figsize'] = [6, 6]
+        plt.rcParams['figure.dpi'] = 100
+        plt.rcParams["font.size"] = "8"
+
+        ylabel = metric.upper()
+        
+        if metric_type == 'evaluation':
+            df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
+            title = 'Median ' + ylabel + ' (all product groups)'
+        elif metric_type == 'confidence':
+            df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
+            title = 'Median ' + ylabel + ' (confident product groups)'
+        
+        columns_m = list()
+        columns_h = list()
+        labels = list()
+        for column in df.columns:
+            if metric + '_m' in column:
+                columns_m.append(column)
+                labels.append(column[:-len(metric)-4])
+            elif metric + '_h' in column:
+                columns_h.append(column)
+
+        df_m = df[columns_m]
+        df_h = df[columns_h]
+
+        model = df_m.squeeze().values
+        human = df_h.squeeze().values
+        
+        x = np.arange(len(labels))  # the label locations
+        width = 0.35  # the width of the bars
+
+        fig, ax = plt.subplots()
+        rects1 = ax.bar(x - width/2, model, width, label='Model vs Fact')
+        rects2 = ax.bar(x + width/2, human, width, label='Human vs Fact')
+
+        # Add some text for labels, title and custom x-axis tick labels, etc.
+#         ax.set_ylim(0, 1)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.legend()
+        plt.xticks(rotation = 45)
+
+        def autolabel(rects):
+            """Attach a text label above each bar in *rects*, displaying its height."""
+            for rect in rects:
+                height = rect.get_height()
+                ax.annotate('{}'.format(height),
+                            xy=(rect.get_x() + rect.get_width() / 2, height),
+                            xytext=(0, 3),  # 3 points vertical offset
+                            textcoords="offset points",
+                            ha='center', va='bottom')
+
+        autolabel(rects1)
+        autolabel(rects2)
+
+        fig.tight_layout()
+
+        plt.show()
+
+        
+    def plot_performance_metrics_future(self, metric_type='evaluation', metric_filter=None):
+        metric_filter = self.__get_supported_metrics(metric_filter)
+        for metric in metric_filter:
+            self.__plot_performance_metrics_future(metric_type, metric)
+
+    def __plot_performance_metrics_future(self, metric_type, metric):
+        
+        plt.rcParams['figure.figsize'] = [6, 6]
+        plt.rcParams['figure.dpi'] = 100
+        plt.rcParams["font.size"] = "8"
+
+        ylabel = metric.upper()
+        
+        if metric_type == 'evaluation':
+            df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
+            title = 'Median ' + ylabel + ' (all product groups)'
+        elif metric_type == 'confidence':
+            df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
+            title = 'Median ' + ylabel + ' (confident product groups)'
+        
+        columns_m_h = list()
+        columns_f_m_h = list()
+        labels = list()
+        for column in df.columns:
+            if metric + '__m' in column:
+                columns_m_h.append(column)
+                labels.append(column[:-len(metric)-4])
+            elif metric + '_f_m' in column:
+                columns_f_m_h.append(column)
+
+        df_m_h = df[columns_m_h]
+        df_f_m_h = df[columns_f_m_h]
+
+        model_human = df_m_h.squeeze().values
+        future_model_human = df_f_m_h.squeeze().values
+        
+        x = np.arange(len(labels))  # the label locations
+        width = 0.35  # the width of the bars
+
+        fig, ax = plt.subplots()
+        rects1 = ax.bar(x - width/2, model_human, width, label='Model vs Human (Historic)')
+        rects2 = ax.bar(x + width/2, future_model_human, width, label='Model vs Human (Future)')
+
+        # Add some text for labels, title and custom x-axis tick labels, etc.
+#         ax.set_ylim(0, 1)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.legend()
+        plt.xticks(rotation = 45)
+
+        def autolabel(rects):
+            """Attach a text label above each bar in *rects*, displaying its height."""
+            for rect in rects:
+                height = rect.get_height()
+                ax.annotate('{}'.format(height),
+                            xy=(rect.get_x() + rect.get_width() / 2, height),
+                            xytext=(0, 3),  # 3 points vertical offset
+                            textcoords="offset points",
+                            ha='center', va='bottom')
+
+        autolabel(rects1)
+        autolabel(rects2)
+
+        fig.tight_layout()
+
+        plt.show()
+        
+    def __tips_useful_methods(self):
+        if not self.show_tips:
+            return
+        print("Useful methods:")
+        print("analysis_metrics.confidence_criteria()")
+        print("analysis_metrics.plot_confidence_comparison(metric_filter=None)")
+        print("analysis_metrics.plot_confidence_comparison_account()")
+        print("analysis_metrics.plot_performance_metrics(metric_type='evaluation', metric_filter=None)")
+        print("analysis_metrics.plot_performance_metrics_historic(metric_type='evaluation', metric_filter=None)")
+        print("analysis_metrics.plot_performance_metrics_future(metric_type='evaluation', metric_filter=None)")

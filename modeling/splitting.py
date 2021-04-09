@@ -11,7 +11,8 @@ class Splitting(object):
             raise Exception("If splits is not defined that data should be provided!")
         elif self.splits is None:
             # Get required fields
-            self.data = data[['account_banner', 'week', 'promotion_technical_id', 'original_pid']]
+            # if data contains duplicates, remove them
+            self.data = data[['account_banner', 'week', 'promotion_technical_id', 'original_pid']].drop_duplicates()
             self.__prepare_splits()
         elif not isinstance(self.splits, dict):
             raise Exception("Splits should be a dictionary")
@@ -33,6 +34,7 @@ class Splitting(object):
         Prepare split for each from num_target splits
         
         """
+        print("Preparing splits...")
         self.splits = dict()
         for seed in range(self.number_tests):
             df = self.data

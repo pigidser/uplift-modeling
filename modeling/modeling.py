@@ -15,45 +15,15 @@ from sklearn.pipeline import Pipeline
 class Model(object):
     
     """
+    This class manipulates with model: creates, trains, saves, loads.
+        
     # Declare a model
-    model = Model(model_name='model1')
+    model = Model(model_name='test')
     
-    # Creating the model from scratch
-    ---------------------------------
-    
-    # Use existing params or None. If params defined, max_evals not used.
-    params = {0.0: {'colsample_bytree': 0.5,
-      'gamma': 0.75,
-      'learning_rate': 0.04,
-      'max_depth': 5,
-      'min_child_weight': 5.0,
-      'n_estimators': 142,
-      'reg_alpha': 0.9,
-      'reg_lambda': 1.4500000000000002,
-      'subsample': 0.55,
-      'transformer_nominal': 'JamesSteinEncoder',
-      'transformer_ordinal': 'OrdinalEncoder',
-      'under_predict_weight': 2.0}}
-
-    # Use feature set from feature_filename file or define another set
-    features = [
-        u'original_pid',
-        u'account_id',
-        u'original_product_dimension_25',
-        u'original_product_dimension_26',
-        u'week_agg_8',
-        u'baseline_units',
-        u'consumer_length',
-        u'promotion_type',
-        u'discount_perc_cohort',
-        u'promoted_niv',
-        u'previous_promotion_week_distance',
-        u'total_nr_products'
-    ]
-
+    # Creating the model from a scratch
     model.create(
-        params=params,
-        max_evals=None,
+        params=None,
+        max_evals=10,
         target_ratio_val=None,
         feature_filename='./outputs/im_feature_info_dict_mars_ru_20210212.txt',
         features=features,
@@ -67,16 +37,33 @@ class Model(object):
         future_target='total_units_2',
         duplication_map=None)
 
-    model.train()
+    
+    # If existing params is used, max_evals not used.
+    params=params,
+    max_evals=None
 
+    # Features are loaded from feature_filename, or can be defined by features parameter (list of features)
+
+    # Finally the model should be trained:
+    model.train()
+    
+    # After training, the model can be saved:
+    model.save()
+    model.save(model_name='new_model_name')
+
+    # Loading model:
+    model = Model(model_name='test')
+    model.load()
+    
     """
 
-    def __init__(self, model_name):
+    def __init__(self, model_name, show_tips=True):
         """
         
         """
 #         self.logger = logging.getLogger('sales_support_helper_application.' + __name__)
         self.model_name = model_name
+        self.show_tips = show_tips
         self.test_splits = None
         self.evaluation_metrics = None
         self.evaluation_future_metrics = None
@@ -87,7 +74,8 @@ class Model(object):
         self.target_ratio_test = None
         
         self.model_initialized = False
-        print("Use create() or load() method to initialize the model.")
+        self.model_trained = False
+        self.__tips_create_or_load()
         
     def get_info(self):
         print("--- Model Information ---")
@@ -118,15 +106,6 @@ class Model(object):
     def get_account_filter(self):
         return self.data['account_banner'].unique()
 
-    def update_info(self, analysis):
-        self.test_splits = analysis.test_splitting.splits
-        self.evaluation_metrics = analysis.evaluation_metrics
-        self.evaluation_future_metrics = analysis.evaluation_future_metrics
-        self.account_test_filter = analysis.account_test_filter
-        self.confidence_threshold = analysis.confidence_threshold
-        self.confidence_metrics = analysis.confidence_metrics
-        self.confidence_future_metrics = analysis.confidence_future_metrics
-        
     def create(self, params, max_evals, target_ratio_val, feature_filename, features, target, cat_feature,
                output_dir, data_filename, filter_filename, account_filter, future_data_filename, future_target,
                duplication_map):
@@ -159,7 +138,7 @@ class Model(object):
         self.__apply_duplication_map()
         
         self.model_initialized = True
-        print("The model is created. Use AnalysisMetrics class to analyse it.")
+        self.__tips_training()
     
     def check_status(self):
         if not self.model_initialized:
@@ -316,7 +295,10 @@ class Model(object):
                                  ordinals=self.ordinal_features))
             ])
         self.model.fit(train_x, train_y)
+        self.model_trained = True
         print("The model is trained")
+        self.__tips_save()
+        self.__tips_analysis()
         
     def train_save_to_vf(self):
         self.check_status()
@@ -347,6 +329,8 @@ class Model(object):
         
     def __extended_save(self):
         # Additional information storing
+        if self.account_test_filter is None:
+            self.account_test_filter = self.data['account_banner'].unique()
         meta_path = os.path.join(os.getcwd(), self.model_name + '_ext.meta')
         meta_data = {
             'feature_filename': self.feature_filename,
@@ -354,7 +338,6 @@ class Model(object):
             'data_filename': self.data_filename,
             'filter_filename': self.filter_filename,
             'duplication_map': self.duplication_map,
-            'account_test_filter': list(self.account_test_filter),
             'target': self.target,
             'cat_feature': self.cat_feature,
             'future_data_filename': self.future_data_filename,
@@ -363,6 +346,7 @@ class Model(object):
             'confidence_metrics': self.confidence_metrics,
             'confidence_future_metrics': self.confidence_future_metrics,
             'account_filter': list(self.account_filter),
+            'account_test_filter': list(self.account_test_filter),
             'max_evals': self.max_evals,
             'target_ratio_val': self.target_ratio_val,
             'target_ratio_test': self.target_ratio_test,
@@ -394,10 +378,17 @@ class Model(object):
         self.__extended_save()
         self.__standard_save()
         print("The model is saved")
+
+    def __meta_path(self):
+        return os.path.join(os.getcwd(), self.model_name + '_ext.meta')
+
+    def __model_saved(self):
+        meta_path = self.__meta_path()
+        return os.path.isfile(meta_path)
         
     def __extended_load(self):
-        meta_path = os.path.join(os.getcwd(), self.model_name + '_ext.meta')
-        if not os.path.isfile(meta_path):
+        meta_path = self.__meta_path()
+        if not self.__model_saved():
             raise IOError, "Please specify a correct file with model's meta data. File not found: " \
                 + meta_path
         else:
@@ -408,7 +399,6 @@ class Model(object):
                 self.data_filename = meta_data.get('data_filename')
                 self.filter_filename = meta_data.get('filter_filename')
                 self.duplication_map = meta_data.get('duplication_map')
-                self.account_test_filter = meta_data.get('account_test_filter')
                 self.target = meta_data.get('target')
                 self.cat_feature = meta_data.get('cat_feature')
                 self.future_data_filename = meta_data.get('future_data_filename')
@@ -417,6 +407,7 @@ class Model(object):
                 self.confidence_metrics = meta_data.get('confidence_metrics')
                 self.confidence_future_metrics = meta_data.get('confidence_future_metrics')
                 self.account_filter = meta_data.get('account_filter')
+                self.account_test_filter = meta_data.get('account_test_filter')
                 self.max_evals = meta_data.get('max_evals')
                 self.target_ratio_val = meta_data.get('target_ratio_val')
                 self.target_ratio_test = meta_data.get('target_ratio_test')
@@ -446,4 +437,57 @@ class Model(object):
         self.__apply_duplication_map()
         
         self.model_initialized = True
-        print("The model is loaded. Use AnalysisMetrics class to analyse it.")
+        self.model_trained = True
+        print("The model is loaded.")
+        self.__tips_analysis()
+        
+    def __tips_create_or_load(self):
+        if not self.show_tips:
+            return
+        if self.__model_saved():
+            print("Tip: the model exists. You can load it:")
+            print("model.load()")
+            print("or use create() method")
+        else:
+            print("Tip: the model does not exist. Use create() method:")
+            print("model.create(")
+            print("    params=None,")
+            print("    max_evals=10,")
+            print("    target_ratio_val=None,")
+            print("    feature_filename='./outputs/im_feature_info_dict_mars_ru_20210212.txt',")
+            print("    features=None,")
+            print("    target='total_units',")
+            print("    cat_feature='account_banner',")
+            print("    output_dir='outputs',")
+            print("    data_filename='../data/20210212_mars_ru_prod_trainset.msgpack',")
+            print("    filter_filename='./outputs/im_data_retrieval-v6-20210212.txt',")
+            print("    account_filter=['5Pyaterochka (X5)','Lenta','Dixy','Okey Group','Magnit'],")
+            print("    future_data_filename='../data/20210212_mars_ru_prod_futureset.msgpack',")
+            print("    future_target='total_units_2',")
+            print("    duplication_map=None)")
+            
+    def __tips_training(self):
+        if not self.show_tips:
+            return
+        print("Tip: for training the model, use:")
+        print("model.train()")
+        
+    def __tips_save(self):
+        if not self.show_tips:
+            return
+        print("Tip: to save the model, use:")
+        print("model.save()")
+        
+    def __tips_analysis(self):
+        if not self.show_tips:
+            return
+        if self.evaluation_metrics:
+            print("Tip: the model was evaluated. Use AnalysisMetrics() class to analyse it:")
+            print("analysis_metrics = AnalysisMetrics(model=model)")
+        else:
+            print("Tip: the model is not evaluated. Use AnalysisMetrics() class to analyse it:")
+            print("analysis_metrics = AnalysisMetrics(")
+            print("    model=model,")
+            print("    number_tests=100,")
+            print("    confidence_threshold=300,")
+            print("    account_test_filter=['5Pyaterochka (X5)','Lenta','Dixy','Okey Group'])")
