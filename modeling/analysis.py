@@ -6,7 +6,7 @@ from vf_portalytics.multi_model import MultiModel
 import matplotlib.pyplot as plt
 
 from splitting import Splitting
-from utils import suppress_stdout
+from utils import suppress_stdout, autolabel
 
 
 plt.rcParams['figure.figsize'] = [12, 8]
@@ -114,11 +114,11 @@ class AnalysisMetrics(object):
             self.recalculate = False
                     
         self.test_splitting = Splitting(splits=self.model.test_splits, data=self.model.data,
-                                        number_tests=self.number_tests, target_ratio_test=self.target_ratio_test)
+                                        number_tests=self.number_tests, target_ratio=self.target_ratio_test)
         self.__get_unique_index_splits()
         self.__evaluate_model()
         self.__initialize_confidence_filter()
-        self.__initialize_confidence_future_filter()
+#         self.__initialize_confidence_future_filter()
         self.__calculate_model()
         
         self.evaluation_overalls = self.__overall_metrics('evaluation')
@@ -131,11 +131,13 @@ class AnalysisMetrics(object):
         
     def __update_model(self):
         self.model.test_splits = self.test_splitting.splits
-        self.model.evaluation_metrics = self.evaluation_metrics
-        self.model.evaluation_future_metrics = self.evaluation_future_metrics
         self.model.account_test_filter = self.account_test_filter
         self.model.confidence_threshold = self.confidence_threshold
+        self.model.evaluation_metrics = self.evaluation_metrics
+        self.model.evaluation_deferred_metrics = self.evaluation_deferred_metrics
+        self.model.evaluation_future_metrics = self.evaluation_future_metrics
         self.model.confidence_metrics = self.confidence_metrics
+        self.model.confidence_deferred_metrics = self.confidence_deferred_metrics
         self.model.confidence_future_metrics = self.confidence_future_metrics
         self.model.target_ratio_test = self.target_ratio_test
 
@@ -153,12 +155,15 @@ class AnalysisMetrics(object):
     
     def __evaluate_model(self):
         if self.reevaluate:
-            print("Evaluating the model with all historical data...")
+            print("Evaluating the model with historical data (excluding deferred)...")
             self.__evaluation_metrics()
-            print("Evaluating the model with all future data...")
+            print("Evaluating the model with deferred historical data...")
+            self.__evaluation_deferred_metrics()
+            print("Evaluating the model with future data...")
             self.__evaluation_future_metrics()
         else:
             self.evaluation_metrics = self.model.evaluation_metrics
+            self.evaluation_deferred_metrics = self.model.evaluation_deferred_metrics
             self.evaluation_future_metrics = self.model.evaluation_future_metrics
             
     def __initialize_confidence_filter(self):
@@ -178,35 +183,38 @@ class AnalysisMetrics(object):
         else:
             self.confidence_filter = None
 
-    def __initialize_confidence_future_filter(self):
-        """ Find a filter for future data"""
-        if self.confidence_threshold != 0:
-            df = self.__parse_detailed_metrics(['mape_f_m_h'], self.evaluation_future_metrics)
-            df = (df.groupby(['account_banner','original_product_dimension_25','original_product_dimension_26'])
-                              .median().reset_index())
-            filts = dict()
-            for i, row in enumerate(df[df['mape_f_m_h'] > self.confidence_threshold].itertuples()):
-                filt = dict()
-                filt['account_banner'] = row[1]
-                filt['original_product_dimension_25'] = row[2]
-                filt['original_product_dimension_26'] = row[3]
-                filts[i] = filt
-            self.filter_future_data = filts
-        else:
-            self.filter_future_data = None
+#     def __initialize_confidence_future_filter(self):
+#         """ Find a filter for future data"""
+#         if self.confidence_threshold != 0:
+#             df = self.__parse_detailed_metrics(['mape_f_m_h'], self.evaluation_future_metrics)
+#             df = (df.groupby(['account_banner','original_product_dimension_25','original_product_dimension_26'])
+#                               .median().reset_index())
+#             filts = dict()
+#             for i, row in enumerate(df[df['mape_f_m_h'] > self.confidence_threshold].itertuples()):
+#                 filt = dict()
+#                 filt['account_banner'] = row[1]
+#                 filt['original_product_dimension_25'] = row[2]
+#                 filt['original_product_dimension_26'] = row[3]
+#                 filts[i] = filt
+#             self.filter_future_data = filts
+#         else:
+#             self.filter_future_data = None
             
     def __calculate_model(self):
         self.confidence_metrics = self.model.confidence_metrics
+        self.confidence_deferred_metrics = self.model.confidence_deferred_metrics
         self.confidence_future_metrics = self.model.confidence_future_metrics
         if self.model.confidence_metrics is None or self.recalculate:
-            message = "Calulation of metrics for historical data"
-            print(message + ". No confidence threshold defined." if self.confidence_threshold == 0 \
-                  else message + " with 'MAPE' confidence threshold {}.".format(self.confidence_threshold))
+            print("Calulation of metrics for historical data (excluding deferred) with 'MAPE' confidence threshold {}." \
+                  .format(self.confidence_threshold))
             self.__confidence_metrics()
+        if self.model.confidence_deferred_metrics is None or self.recalculate:
+            print("Calulation of metrics for deferred data with 'MAPE' confidence threshold {}." \
+                  .format(self.confidence_threshold))
+            self.__confidence_deferred_metrics()
         if self.model.confidence_future_metrics is None or self.recalculate:
-            message = "Calulation of metrics for future data"
-            print(message + ". No confidence threshold defined." if self.confidence_threshold == 0 \
-                  else message + " with 'MAPE' confidence threshold {}.".format(self.confidence_threshold))
+            print("Calulation of metrics for future data with 'MAPE' confidence threshold {}." \
+                  .format(self.confidence_threshold))
             self.__confidence_future_metrics()
             
     def __evaluation_metrics(self):
@@ -214,6 +222,10 @@ class AnalysisMetrics(object):
         for seed in range(self.number_tests):
             metrics.append(self.__metrics_split(seed, apply_confidence_filter=False))
         self.evaluation_metrics = metrics
+
+    def __evaluation_deferred_metrics(self):
+        metrics = self.__deferred_metrics_split(apply_confidence_filter=False)
+        self.evaluation_deferred_metrics = metrics
 
     def __evaluation_future_metrics(self):
         metrics = self.__future_metrics_split(apply_confidence_filter=False)
@@ -224,6 +236,10 @@ class AnalysisMetrics(object):
         for seed in range(self.number_tests):
             metrics.append(self.__metrics_split(seed, apply_confidence_filter=True))
         self.confidence_metrics = metrics
+
+    def __confidence_deferred_metrics(self):
+        metrics = self.__deferred_metrics_split(apply_confidence_filter=True)
+        self.confidence_deferred_metrics = metrics
 
     def __confidence_future_metrics(self):
         metrics = self.__future_metrics_split(apply_confidence_filter=True)
@@ -289,8 +305,6 @@ class AnalysisMetrics(object):
         self.train_y = self.train.loc[:, self.train.columns == self.model.target]
 
         self.test_x = self.test.loc[:, self.test.columns != self.model.target]
-    #         test_x['baseline_units_original'] = test_x['baseline_units']
-    #         test_x['baseline_units'] = test_x['baseline_units_2']
         self.test_y = self.test.loc[:, self.test.columns == self.model.target]
 
         # transform to Series
@@ -377,17 +391,89 @@ class AnalysisMetrics(object):
 
         return m
 
-    def __future_metrics_split(self, apply_confidence_filter):
+    def __deferred_metrics_split(self, apply_confidence_filter):
+        """
+        # To estimate the deferred dataset, we use full_model that was trained for all data (exlusing the deferred part)
+        
+        """
+        self.test = self.full_model.deferred_data.copy()
+        # Apply account test filter
+        if not self.account_test_filter is None:
+            self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
+        # Apply confidence filter
+        if apply_confidence_filter:
+            self.test = self.__apply_confidence_filter(self.test, self.confidence_filter)
+        self.test_x = self.test.loc[:, self.test.columns != self.full_model.target]
+        self.test_y = self.test.loc[:, self.test.columns == self.full_model.target]
+        self.pred_test_y = self.full_model.model.predict(self.test_x)
 
-        self.test = self.model.future_data.copy()
+        m = dict()
+        # The same metrics as for historic dataset
+        metric_filter = ['r2_m', 'r2_h', 'r2_m_h', 'wape_m', 'wape_h', 'wape_m_h', 'mape_m', 'mape_h', 'mape_m_h', \
+                         'bias_m', 'bias_h', 'bias_m_h', 'sfa_m', 'sfa_h', 'sfa_m_h']
+
+        for account in self.test['account_banner'].unique():
+            m_acc = dict()
+
+            metric_dict = self.__get_metrics_by_account(metric_filter, account)
+
+            # All metrics are renamed due to conflict naming convention with historic metrics
+            m_acc['r2_d_m'] = metric_dict['r2_m']
+            m_acc['r2_d_h'] = metric_dict['r2_h']
+            m_acc['r2__d_m_h'] = metric_dict['r2_m_h']
+            m_acc['wape_d_m'] = metric_dict['wape_m']
+            m_acc['wape_d_h'] = metric_dict['wape_h']
+            m_acc['wape__d_m_h'] = metric_dict['wape_m_h']
+            m_acc['mape_d_m'] = metric_dict['mape_m']
+            m_acc['mape_d_h'] = metric_dict['mape_h']    
+            m_acc['mape__d_m_h'] = metric_dict['mape_m_h']    
+            m_acc['bias_d_m'] = metric_dict['bias_m']
+            m_acc['bias_d_h'] = metric_dict['bias_h']
+            m_acc['bias__d_m_h'] = metric_dict['bias_m_h']
+            m_acc['sfa_d_m'] = metric_dict['sfa_m']
+            m_acc['sfa_d_h'] = metric_dict['sfa_h']
+            m_acc['sfa__d_m_h'] = metric_dict['sfa_m_h']
+            
+            m[account] = m_acc
+
+        # Overall metrics
+        metric_dict = self.__get_overall_metrics(metric_filter)
+        
+        # All metrics are renamed due to conflict naming convention with historic metrics
+        m['r2_d_m'] = metric_dict['r2_m']
+        m['r2_d_h'] = metric_dict['r2_h']
+        m['r2__d_m_h'] = metric_dict['r2_m_h']
+        m['wape_d_m'] = metric_dict['wape_m']
+        m['wape_d_h'] = metric_dict['wape_h']
+        m['wape__d_m_h'] = metric_dict['wape_m_h']
+        m['mape_d_m'] = metric_dict['mape_m']
+        m['mape_d_h'] = metric_dict['mape_h']    
+        m['mape__d_m_h'] = metric_dict['mape_m_h']    
+        m['bias_d_m'] = metric_dict['bias_m']
+        m['bias_d_h'] = metric_dict['bias_h']
+        m['bias__d_m_h'] = metric_dict['bias_m_h']
+        m['sfa_d_m'] = metric_dict['sfa_m']
+        m['sfa_d_h'] = metric_dict['sfa_h']
+        m['sfa__d_m_h'] = metric_dict['sfa_m_h']
+
+        metrics = list()
+        metrics.append(m)
+        return metrics
+    
+    def __future_metrics_split(self, apply_confidence_filter):
+        """
+        # To estimate the future dataset, we use full_model that was trained for all data (exlusing the deferred part)
+        
+        """
+        self.test = self.full_model.future_data.copy()
         # Apply account test filter
         if not self.account_test_filter is None:
             self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
         # Apply product test filter
         if apply_confidence_filter:
-            self.test = self.__apply_confidence_filter(self.test, self.filter_future_data)
-        self.test_x = self.test.loc[:, self.test.columns != self.model.future_target]
-        self.test_y = self.test.loc[:, self.test.columns == self.model.future_target]
+            self.test = self.__apply_confidence_filter(self.test, self.confidence_filter)
+        self.test_x = self.test.loc[:, self.test.columns != self.full_model.future_target]
+        self.test_y = self.test.loc[:, self.test.columns == self.full_model.future_target]
         self.pred_test_y = self.full_model.model.predict(self.test_x)
 
         m = dict()
@@ -404,43 +490,43 @@ class AnalysisMetrics(object):
             m_acc['bias_f_m_h'] = metric_dict['bias_f_m_h']
             m_acc['sfa_f_m_h'] = metric_dict['sfa_f_m_h']
 
-            for product_25 in self.test[self.test['account_banner']==account]['original_product_dimension_25'].unique():
-                m_25 = dict()
-                metric_dict = \
-                    self.__get_metrics_by_account_product25(metric_filter, account, product_25)
+#             for product_25 in self.test[self.test['account_banner']==account]['original_product_dimension_25'].unique():
+#                 m_25 = dict()
+#                 metric_dict = \
+#                     self.__get_metrics_by_account_product25(metric_filter, account, product_25)
                 
-                m_25['r2_f_m_h'] = metric_dict['r2_f_m_h']
-                m_25['wape_f_m_h'] = metric_dict['wape_f_m_h']
-                m_25['mape_f_m_h'] = metric_dict['mape_f_m_h']
-                m_25['bias_f_m_h'] = metric_dict['bias_f_m_h']
-                m_25['sfa_f_m_h'] = metric_dict['sfa_f_m_h']
+#                 m_25['r2_f_m_h'] = metric_dict['r2_f_m_h']
+#                 m_25['wape_f_m_h'] = metric_dict['wape_f_m_h']
+#                 m_25['mape_f_m_h'] = metric_dict['mape_f_m_h']
+#                 m_25['bias_f_m_h'] = metric_dict['bias_f_m_h']
+#                 m_25['sfa_f_m_h'] = metric_dict['sfa_f_m_h']
 
-                for product_26 in self.test[(self.test['account_banner']==account) & \
-                                            (self.test['original_product_dimension_25']==product_25)] \
-                                        ['original_product_dimension_26'].unique():
-                    m_26 = dict()
-                    metric_dict = \
-                        self.__get_metrics_by_account_product25_product26(metric_filter, account, product_25, product_26)
+#                 for product_26 in self.test[(self.test['account_banner']==account) & \
+#                                             (self.test['original_product_dimension_25']==product_25)] \
+#                                         ['original_product_dimension_26'].unique():
+#                     m_26 = dict()
+#                     metric_dict = \
+#                         self.__get_metrics_by_account_product25_product26(metric_filter, account, product_25, product_26)
                     
-                    m_26['r2_f_m_h'] = metric_dict['r2_f_m_h']
-                    m_26['wape_f_m_h'] = metric_dict['wape_f_m_h']
-                    m_26['mape_f_m_h'] = metric_dict['mape_f_m_h']
-                    m_26['bias_f_m_h'] = metric_dict['bias_f_m_h']
-                    m_26['sfa_f_m_h'] = metric_dict['sfa_f_m_h']
-                    m_25[product_26] = m_26
+#                     m_26['r2_f_m_h'] = metric_dict['r2_f_m_h']
+#                     m_26['wape_f_m_h'] = metric_dict['wape_f_m_h']
+#                     m_26['mape_f_m_h'] = metric_dict['mape_f_m_h']
+#                     m_26['bias_f_m_h'] = metric_dict['bias_f_m_h']
+#                     m_26['sfa_f_m_h'] = metric_dict['sfa_f_m_h']
+#                     m_25[product_26] = m_26
 
-                m_acc[product_25] = m_25
+#                 m_acc[product_25] = m_25
 
             m[account] = m_acc
 
-            # Overall metrics
-            metric_dict = self.__get_overall_metrics(metric_filter)
-            
-            m['r2_f_m_h'] = metric_dict['r2_f_m_h']
-            m['wape_f_m_h'] = metric_dict['wape_f_m_h']
-            m['mape_f_m_h'] = metric_dict['mape_f_m_h']
-            m['bias_f_m_h'] = metric_dict['bias_f_m_h']
-            m['sfa_f_m_h'] = metric_dict['sfa_f_m_h']
+        # Overall metrics
+        metric_dict = self.__get_overall_metrics(metric_filter)
+
+        m['r2_f_m_h'] = metric_dict['r2_f_m_h']
+        m['wape_f_m_h'] = metric_dict['wape_f_m_h']
+        m['mape_f_m_h'] = metric_dict['mape_f_m_h']
+        m['bias_f_m_h'] = metric_dict['bias_f_m_h']
+        m['sfa_f_m_h'] = metric_dict['sfa_f_m_h']
 
         metrics = list()
         metrics.append(m)
@@ -483,7 +569,6 @@ class AnalysisMetrics(object):
             line['Overall / sfa_h'] = item['sfa_h']
             line['Overall / sfa__m_h'] = item['sfa__m_h']
             lines.append(line)
-
         data = pd.DataFrame(lines)
         data = data[['seed','train_r2','train','test',
                      'Overall / r2_m','Overall / r2_h','Overall / r2__m_h',
@@ -491,12 +576,41 @@ class AnalysisMetrics(object):
                      'Overall / mape_m','Overall / mape_h','Overall / mape__m_h',
                      'Overall / bias_m','Overall / bias_h','Overall / bias__m_h',
                      'Overall / sfa_m','Overall / sfa_h','Overall / sfa__m_h',]]
+        return data    
+    
+    def __deferred_overall_metrics(self, metrics):
+        # Deferred data
+        lines = list()
+        for item in metrics:
+            line = dict()
+            line['Overall / r2_d_m'] = item['r2_d_m']
+            line['Overall / r2_d_h'] = item['r2_d_h']
+            line['Overall / r2__d_m_h'] = item['r2__d_m_h']
+            line['Overall / wape_d_m'] = item['wape_d_m']
+            line['Overall / wape_d_h'] = item['wape_d_h']
+            line['Overall / wape__d_m_h'] = item['wape__d_m_h']
+            line['Overall / mape_d_m'] = item['mape_d_m']
+            line['Overall / mape_d_h'] = item['mape_d_h']
+            line['Overall / mape__d_m_h'] = item['mape__d_m_h']
+            line['Overall / bias_d_m'] = item['bias_d_m']
+            line['Overall / bias_d_h'] = item['bias_d_h']
+            line['Overall / bias__d_m_h'] = item['bias__d_m_h']
+            line['Overall / sfa_d_m'] = item['sfa_d_m']
+            line['Overall / sfa_d_h'] = item['sfa_d_h']
+            line['Overall / sfa__d_m_h'] = item['sfa__d_m_h']
+            lines.append(line)
+        data = pd.DataFrame(lines)
+        data = data[['Overall / r2_d_m','Overall / r2_d_h','Overall / r2__d_m_h',
+                     'Overall / wape_d_m','Overall / wape_d_h','Overall / wape__d_m_h',
+                     'Overall / mape_d_m','Overall / mape_d_h','Overall / mape__d_m_h',
+                     'Overall / bias_d_m','Overall / bias_d_h','Overall / bias__d_m_h',
+                     'Overall / sfa_d_m','Overall / sfa_d_h','Overall / sfa__d_m_h']]
         return data
     
-    def __future_overall_metrics(self, future_metrics):
+    def __future_overall_metrics(self, metrics):
         # Future data
         lines = list()
-        for item in future_metrics:
+        for item in metrics:
             line = dict()
             line['Overall / r2_f_m_h'] = item['r2_f_m_h']
             line['Overall / wape_f_m_h'] = item['wape_f_m_h']
@@ -504,10 +618,10 @@ class AnalysisMetrics(object):
             line['Overall / bias_f_m_h'] = item['bias_f_m_h']
             line['Overall / sfa_f_m_h'] = item['sfa_f_m_h']
             lines.append(line)
-        future_data = pd.DataFrame(lines)
-        future_data = future_data[['Overall / r2_f_m_h','Overall / wape_f_m_h','Overall / mape_f_m_h',
-                                   'Overall / bias_f_m_h','Overall / sfa_f_m_h']]
-        return future_data
+        data = pd.DataFrame(lines)
+        data = data[['Overall / r2_f_m_h','Overall / wape_f_m_h','Overall / mape_f_m_h',
+                     'Overall / bias_f_m_h','Overall / sfa_f_m_h']]
+        return data
     
     def __overall_metrics(self, metric_type):
         """Get overall metrics"""
@@ -516,18 +630,22 @@ class AnalysisMetrics(object):
         # Select metrics
         if metric_type == 'evaluation':
             metrics = self.evaluation_metrics
+            deferred_metrics = self.evaluation_deferred_metrics
             future_metrics = self.evaluation_future_metrics
         else:
             metrics = self.confidence_metrics
+            deferred_metrics = self.confidence_deferred_metrics
             future_metrics = self.confidence_future_metrics
         # Historic test results            
         data = self.__historic_overall_metrics(metrics)
         data = data.drop('seed', axis=1)
         data = data.quantile([0.5]).reset_index(drop=True)
+        # Deferred test results
+        deferred_data = self.__deferred_overall_metrics(deferred_metrics)
         # Future test results
         future_data = self.__future_overall_metrics(future_metrics)
-        # Merge historic and future test results
-        df = pd.concat([data, future_data], axis=1)
+        # Merge historic, deferred and future test results
+        df = pd.concat([data, deferred_data, future_data], axis=1)
         return df
     
     def __historic_account_metrics(self, metrics):
@@ -558,11 +676,37 @@ class AnalysisMetrics(object):
             lines.append(line)
         data = pd.DataFrame(lines)
         return data
-        
-    def __future_account_metrics(self, future_metrics):
+    
+    def __deferred_account_metrics(self, metrics):
+        # Deferred data
+        lines = list()
+        for item in metrics:
+            line = dict()
+            for key_acc in item.keys():
+                if isinstance(item[key_acc], dict):
+                    line[key_acc + ' / r2_d_m'] = item[key_acc]['r2_d_m']
+                    line[key_acc + ' / r2_d_h'] = item[key_acc]['r2_d_h']
+                    line[key_acc + ' / r2__d_m_h'] = item[key_acc]['r2__d_m_h']
+                    line[key_acc + ' / wape_d_m'] = item[key_acc]['wape_d_m']
+                    line[key_acc + ' / wape_d_h'] = item[key_acc]['wape_d_h']
+                    line[key_acc + ' / wape__d_m_h'] = item[key_acc]['wape__d_m_h']
+                    line[key_acc + ' / mape_d_m'] = item[key_acc]['mape_d_m']
+                    line[key_acc + ' / mape_d_h'] = item[key_acc]['mape_d_h']
+                    line[key_acc + ' / mape__d_m_h'] = item[key_acc]['mape__d_m_h']
+                    line[key_acc + ' / bias_d_m'] = item[key_acc]['bias_d_m']
+                    line[key_acc + ' / bias_d_h'] = item[key_acc]['bias_d_h']
+                    line[key_acc + ' / bias__d_m_h'] = item[key_acc]['bias__d_m_h']
+                    line[key_acc + ' / sfa_d_m'] = item[key_acc]['sfa_d_m']
+                    line[key_acc + ' / sfa_d_h'] = item[key_acc]['sfa_d_h']
+                    line[key_acc + ' / sfa__d_m_h'] = item[key_acc]['sfa__d_m_h']
+            lines.append(line)
+        data = pd.DataFrame(lines)
+        return data
+
+    def __future_account_metrics(self, metrics):
         # Future data
         lines = list()
-        for item in future_metrics:
+        for item in metrics:
             line = dict()
             for key_acc in item.keys():
                 if isinstance(item[key_acc], dict):
@@ -572,8 +716,8 @@ class AnalysisMetrics(object):
                     line[key_acc + ' / bias_f_m_h'] = item[key_acc]['bias_f_m_h']
                     line[key_acc + ' / sfa_f_m_h'] = item[key_acc]['sfa_f_m_h']
             lines.append(line)
-        future_data = pd.DataFrame(lines)
-        return future_data
+        data = pd.DataFrame(lines)
+        return data
 
     def __account_metrics(self, metric_type):
         """Get metrics by accounts"""
@@ -582,17 +726,21 @@ class AnalysisMetrics(object):
         # Select metrics
         if metric_type == 'evaluation':
             metrics = self.evaluation_metrics
+            deferred_metrics = self.evaluation_deferred_metrics
             future_metrics = self.evaluation_future_metrics
         else:
             metrics = self.confidence_metrics
+            deferred_metrics = self.confidence_deferred_metrics
             future_metrics = self.confidence_future_metrics
         # Historic test results
         data = self.__historic_account_metrics(metrics)
         data = data.quantile([0.5]).reset_index(drop=True)
+        # Deferred test results
+        deferred_data = self.__deferred_account_metrics(deferred_metrics)
         # Future test results
         future_data = self.__future_account_metrics(future_metrics)
-        # Merge historic and future data
-        df = pd.concat([data, future_data], axis=1)
+        # Merge historic, deferred and future data
+        df = pd.concat([data, deferred_data, future_data], axis=1)
         return df
     
     def metrics_median(self, level):
@@ -715,26 +863,26 @@ class AnalysisMetrics(object):
                                    
         print("Model Confidence Criteria report is saved to {}".format(report_name))
     
-    def get_filter_future_data(self):
-        if self.confidence_threshold == 0:
-            print("Product filter is not defined.")
-            return
-        print("Future test filter for threshold {}:".format(self.confidence_threshold))
-        df = pd.DataFrame(self.filter_future_data).T.sort_values(
-            ['account_banner','original_product_dimension_25','original_product_dimension_26'])
-        print(df.to_string())
+#     def get_filter_future_data(self):
+#         if self.confidence_threshold == 0:
+#             print("Product filter is not defined.")
+#             return
+#         print("Future test filter for threshold {}:".format(self.confidence_threshold))
+#         df = pd.DataFrame(self.filter_future_data).T.sort_values(
+#             ['account_banner','original_product_dimension_25','original_product_dimension_26'])
+#         print(df.to_string())
 
-    def get_product_filter(self, filter='historic'):
-        if filter == 'historic':
-            filters = self.confidence_filter
-            print("historic filter:")
-        else:
-            filters = self.filter_future_data
-            print("future filter:")
-        for key in filters.keys():
-            print("{} / {} / {}".format(filters[key]['account_banner'],
-                                        filters[key]['original_product_dimension_25'],
-                                        filters[key]['original_product_dimension_26']))
+#     def get_product_filter(self, filter='historic'):
+#         if filter == 'historic':
+#             filters = self.confidence_filter
+#             print("historic filter:")
+#         else:
+#             filters = self.filter_future_data
+#             print("future filter:")
+#         for key in filters.keys():
+#             print("{} / {} / {}".format(filters[key]['account_banner'],
+#                                         filters[key]['original_product_dimension_25'],
+#                                         filters[key]['original_product_dimension_26']))
             
     def __get_supported_metrics(self, metric_filter):
         supported_metrics = list(['r2','wape','mape','bias','sfa'])
@@ -758,16 +906,8 @@ class AnalysisMetrics(object):
         plt.rcParams["font.size"] = "8"
         
         ylabel = metric.upper()
-
-        def autolabel(ax, rects):
-            """Attach a text label above each bar in *rects*, displaying its height."""
-            for rect in rects:
-                height = rect.get_height()
-                ax.annotate('{}'.format(height),
-                            xy=(rect.get_x() + rect.get_width() / 2, height),
-                            xytext=(0, 3),  # 3 points vertical offset
-                            textcoords="offset points",
-                            ha='center', va='bottom')
+        metric_max = []
+        metric_min = []
 
         def figure(ax, metric_type, metric, ylabel, title):
             if metric_type == 'evaluation':
@@ -785,6 +925,9 @@ class AnalysisMetrics(object):
 
             model = df[columns_m].squeeze().values
             human = df[columns_h].squeeze().values
+            metric_max.append(np.concatenate([model, human]).max())
+            metric_min.append(np.concatenate([model, human]).min())
+            
             x = np.arange(len(labels))  # the label locations
             width = 0.35  # the width of the bars
             rects1 = ax.bar(x - width/2, model, width, label='Model vs Fact')
@@ -794,7 +937,7 @@ class AnalysisMetrics(object):
             autolabel(ax, rects2)
 
             # Add some text for labels, title and custom x-axis tick labels, etc.
-#             ax.set_ylim(0, 1)
+            
             ax.set_ylabel(ylabel)
             ax.set_title(title)
             ax.set_xticks(x)
@@ -805,12 +948,20 @@ class AnalysisMetrics(object):
         fig, axs = plt.subplots(1,2)
         plt.tight_layout() 
 
-        title = "Median {} (all product groups)".format(ylabel)
+        title = "{}: Median {} (all product groups)".format(self.model.model_name, ylabel)
         figure(axs[0], 'evaluation', metric, ylabel, title=title)
         
-        title = "Median {} (confident product groups, MAPE threshold={}".format(ylabel, self.confidence_threshold)
+        title = "{}: Median {} (confident product groups, MAPE threshold={}".format(self.model.model_name,
+                                                                                    ylabel,
+                                                                                    self.confidence_threshold)
         figure(axs[1], 'confidence', metric, ylabel, title=title)
+        
+        y_lim_max = 0 if max(metric_max) < 0 else max(metric_max) * 1.2
+        y_lim_min = 0 if min(metric_min) > 0 else min(metric_min) * 1.2
 
+        axs[0].set_ylim(y_lim_min, y_lim_max)
+        axs[1].set_ylim(y_lim_min, y_lim_max)
+        
         plt.show()
         
     def plot_performance_metrics(self, metric_type='evaluation', metric_filter=None):
@@ -828,10 +979,10 @@ class AnalysisMetrics(object):
         
         if metric_type == 'evaluation':
             df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
-            title = 'Median ' + ylabel + ' (all product groups)'
+            title = self.model.model_name + ': Median ' + ylabel + ' (all product groups)'
         elif metric_type == 'confidence':
             df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
-            title = 'Median ' + ylabel + ' (confident product groups)'
+            title = self.model.model_name + ': Median ' + ylabel + ' (confident product groups)'
         
         columns_m = list()
         columns_h = list()
@@ -876,20 +1027,10 @@ class AnalysisMetrics(object):
         ax.legend()
         plt.xticks(rotation = 45)
 
-        def autolabel(rects):
-            """Attach a text label above each bar in *rects*, displaying its height."""
-            for rect in rects:
-                height = rect.get_height()
-                ax.annotate('{}'.format(height),
-                            xy=(rect.get_x() + rect.get_width() / 2, height),
-                            xytext=(0, 3),  # 3 points vertical offset
-                            textcoords="offset points",
-                            ha='center', va='bottom')
-
-        autolabel(rects1)
-        autolabel(rects2)
-        autolabel(rects3)
-        autolabel(rects4)
+        autolabel(ax, rects1)
+        autolabel(ax, rects2)
+        autolabel(ax, rects3)
+        autolabel(ax, rects4)
 
         fig.tight_layout()
 
@@ -905,17 +1046,7 @@ class AnalysisMetrics(object):
         plt.rcParams['figure.dpi'] = 100
         plt.rcParams["font.size"] = "8"
 
-        title = account
-
-        def autolabel(ax, rects):
-            """Attach a text label above each bar in *rects*, displaying its height."""
-            for rect in rects:
-                height = rect.get_height()
-                ax.annotate('{}'.format(height),
-                            xy=(rect.get_x() + rect.get_width() / 2, height),
-                            xytext=(0, 3),  # 3 points vertical offset
-                            textcoords="offset points",
-                            ha='center', va='bottom')
+        title = self.model.model_name + ': ' + account
 
         fig, ax = plt.subplots()
         plt.tight_layout()
@@ -974,10 +1105,10 @@ class AnalysisMetrics(object):
         
         if metric_type == 'evaluation':
             df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
-            title = 'Median ' + ylabel + ' (all product groups)'
+            title = self.model.model_name + ': Median ' + ylabel + ' (all product groups)'
         elif metric_type == 'confidence':
             df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
-            title = 'Median ' + ylabel + ' (confident product groups)'
+            title = self.model.model_name + ': Median ' + ylabel + ' (confident product groups)'
         
         columns_m = list()
         columns_h = list()
@@ -1011,18 +1142,8 @@ class AnalysisMetrics(object):
         ax.legend()
         plt.xticks(rotation = 45)
 
-        def autolabel(rects):
-            """Attach a text label above each bar in *rects*, displaying its height."""
-            for rect in rects:
-                height = rect.get_height()
-                ax.annotate('{}'.format(height),
-                            xy=(rect.get_x() + rect.get_width() / 2, height),
-                            xytext=(0, 3),  # 3 points vertical offset
-                            textcoords="offset points",
-                            ha='center', va='bottom')
-
-        autolabel(rects1)
-        autolabel(rects2)
+        autolabel(ax, rects1)
+        autolabel(ax, rects2)
 
         fig.tight_layout()
 
@@ -1044,10 +1165,10 @@ class AnalysisMetrics(object):
         
         if metric_type == 'evaluation':
             df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
-            title = 'Median ' + ylabel + ' (all product groups)'
+            title = self.model.model_name + ': Median ' + ylabel + ' (all product groups)'
         elif metric_type == 'confidence':
             df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
-            title = 'Median ' + ylabel + ' (confident product groups)'
+            title = self.model.model_name + ': Median ' + ylabel + ' (confident product groups)'
         
         columns_m_h = list()
         columns_f_m_h = list()
@@ -1081,30 +1202,117 @@ class AnalysisMetrics(object):
         ax.legend()
         plt.xticks(rotation = 45)
 
-        def autolabel(rects):
-            """Attach a text label above each bar in *rects*, displaying its height."""
-            for rect in rects:
-                height = rect.get_height()
-                ax.annotate('{}'.format(height),
-                            xy=(rect.get_x() + rect.get_width() / 2, height),
-                            xytext=(0, 3),  # 3 points vertical offset
-                            textcoords="offset points",
-                            ha='center', va='bottom')
-
-        autolabel(rects1)
-        autolabel(rects2)
+        autolabel(ax, rects1)
+        autolabel(ax, rects2)
 
         fig.tight_layout()
 
         plt.show()
         
+    def overall_metrics_dataframe(self, metric_type):
+        if metric_type not in ['evaluation','confidence']:
+            metric_type = 'evaluation'
+        # Select metrics
+        if metric_type == 'evaluation':
+            df = self.evaluation_overalls.copy()
+        else:
+            df = self.confidence_overalls.copy()
+        df_list = []
+        df = df.drop(['test','train','train_r2'], axis=1)
+        metrics = ['r2','mape','sfa','bias','wape']
+        for metric in metrics:
+            columns = list()
+            for column in df.columns:
+                if metric in column:
+                    columns.append(column)
+            df_new = df[columns].T.reset_index()
+            df_new['index'] = df_new['index'].apply(lambda x: x[len('Overall / ')+len(metric)+1:])
+            df_new = df_new.set_index('index')
+            df_new.columns = [metric]
+            df_list.append(df_new)
+        df_joined = pd.concat(df_list, axis=1)
+        replace_dict = {
+            'index': {
+                'm': '1. Model vs Fact',
+                'h': '2. Human vs Fact',
+                'd_m': '3. Model vs Fact (deferred)',
+                'd_h': '4. Human vs Fact (deferred)',
+                '_m_h': '5. Model vs Human (hist.)',
+                '_d_m_h': '6. Model vs Human (deferred)',
+                'f_m_h': '7. Model vs Human (future)'}
+        }
+        df_joined.reset_index(inplace=True)
+        df_joined = df_joined.replace(replace_dict)
+        return df_joined.sort_values(['index'])
+
+    def account_metrics_dataframe(self, metric_type, account):
+        if metric_type not in ['evaluation','confidence']:
+            metric_type = 'evaluation'
+        # Select metrics
+        if metric_type == 'evaluation':
+            df = self.evaluation_accounts.copy()
+        else:
+            df = self.confidence_accounts.copy()
+        df_list = []
+        metrics = ['r2','mape','sfa','bias','wape']
+        for metric in metrics:
+            columns = list()
+            for column in df.columns:
+                if metric in column and account in column:
+                    columns.append(column)
+            df_new = df[columns].T.reset_index()
+            df_new['index'] = df_new['index'].apply(lambda x: x[len(account)+len(metric)+4:])
+            df_new = df_new.set_index('index')
+            df_new.columns = [metric]
+            df_list.append(df_new)
+        df_joined = pd.concat(df_list, axis=1)
+        replace_dict = {
+            'index': {
+                'm': '1. Model vs Fact',
+                'h': '2. Human vs Fact',
+                'd_m': '3. Model vs Fact (deferred)',
+                'd_h': '4. Human vs Fact (deferred)',
+                '_m_h': '5. Model vs Human (hist.)',
+                '_d_m_h': '6. Model vs Human (deferred)',
+                'f_m_h': '7. Model vs Human (future)'}
+        }
+        df_joined.reset_index(inplace=True)
+        df_joined = df_joined.replace(replace_dict)
+        return df_joined.sort_values(['index'])
+
+    def save_all_metrics(self):
+        """
+        Save all metrics to a file.
+        
+        """
+        report_name = os.path.join(self.model.output_dir, self.model.model_name + '_all_metrics.xlsx')
+        with pd.ExcelWriter(report_name) as writer:
+            df = pd.concat([self.overall_metrics_dataframe(metric_type='evaluation'),
+                            self.overall_metrics_dataframe(metric_type='confidence')], axis=1)
+            df.to_excel(writer, sheet_name='overalls')
+            for account in self.model.account_test_filter:
+                df = pd.concat([self.account_metrics_dataframe(metric_type='evaluation', account=account),
+                                self.account_metrics_dataframe(metric_type='confidence', account=account)], axis=1)
+                df.to_excel(writer, sheet_name=account)
+                                   
+        print("Model's metrics is saved to {}".format(report_name))
+
     def __tips_useful_methods(self):
         if not self.show_tips:
             return
-        print("Useful methods:")
-        print("analysis_metrics.confidence_criteria()")
-        print("analysis_metrics.plot_confidence_comparison(metric_filter=None)")
-        print("analysis_metrics.plot_confidence_comparison_account()")
-        print("analysis_metrics.plot_performance_metrics(metric_type='evaluation', metric_filter=None)")
-        print("analysis_metrics.plot_performance_metrics_historic(metric_type='evaluation', metric_filter=None)")
-        print("analysis_metrics.plot_performance_metrics_future(metric_type='evaluation', metric_filter=None)")
+        print("Useful methods")
+        print("--------------")
+        print("- analysis_metrics.confidence_criteria()")
+        print("- analysis_metrics.plot_confidence_comparison(metric_filter=None)")
+        print("- analysis_metrics.plot_confidence_comparison_account()")
+        print("- analysis_metrics.plot_performance_metrics(metric_type, metric_filter=None)")
+        print("- analysis_metrics.plot_performance_metrics_historic(metric_type=, metric_filter=None)")
+        print("- analysis_metrics.plot_performance_metrics_future(metric_type, metric_filter=None)")
+        print("To get metrics as dataframe:")
+        print("- analysis_metrics.overall_metrics_dataframe(metric_type)")
+        print("- analysis_metrics.account_metrics_dataframe(metric_type)")
+        print("or save all metrics to file:")
+        print("- analysis_metrics.save_all_metrics()")
+        print("")
+        print("metric_type = 'evaluation' or 'confidence'")
+        print("metric_filter = ['r2','mape','sfa','bias','wape']")

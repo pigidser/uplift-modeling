@@ -6,6 +6,7 @@ import json
 from vf_portalytics.multi_model import MultiModel
 from vf_portalytics.model import PredictionModel
 
+from splitting import LastSplitting
 from hyperparams import Hyperparameters
 from analysis import AnalysisMetrics
 from transforms import ClusterTransform
@@ -24,7 +25,7 @@ class Model(object):
     model.create(
         params=None,
         max_evals=10,
-        target_ratio_val=None,
+        target_ratio_param=None,
         feature_filename='./outputs/im_feature_info_dict_mars_ru_20210212.txt',
         features=features,
         target='total_units',
@@ -64,14 +65,16 @@ class Model(object):
 #         self.logger = logging.getLogger('sales_support_helper_application.' + __name__)
         self.model_name = model_name
         self.show_tips = show_tips
+        self.target_ratio_test = None
         self.test_splits = None
-        self.evaluation_metrics = None
-        self.evaluation_future_metrics = None
         self.account_test_filter = None
         self.confidence_threshold = None
+        self.evaluation_metrics = None
+        self.evaluation_deferred_metrics = None
+        self.evaluation_future_metrics = None
         self.confidence_metrics = None
+        self.confidence_deferred_metrics = None
         self.confidence_future_metrics = None
-        self.target_ratio_test = None
         
         self.model_initialized = False
         self.model_trained = False
@@ -106,16 +109,17 @@ class Model(object):
     def get_account_filter(self):
         return self.data['account_banner'].unique()
 
-    def create(self, params, max_evals, target_ratio_val, feature_filename, features, target, cat_feature,
-               output_dir, data_filename, filter_filename, account_filter, future_data_filename, future_target,
-               duplication_map):
+    def create(self, params, max_evals, target_ratio_param, target_ratio_defer, feature_filename,
+               features, target, cat_feature, output_dir, data_filename, filter_filename, account_filter,
+               future_data_filename, future_target, duplication_map):
         """
         Define the next artifacts related to input
         """
 #         self.logger = logging.getLogger('sales_support_helper_application.' + __name__)
         self.params = params
         self.max_evals = max_evals or 200
-        self.target_ratio_val = target_ratio_val
+        self.target_ratio_param = target_ratio_param or 0.30
+        self.target_ratio_defer = target_ratio_defer or 0.20
         self.feature_filename = feature_filename
         self.features = features
         self.target = target
@@ -132,6 +136,7 @@ class Model(object):
         self.__load_future_data()
         self.__load_features()
         self.__apply_account_filter()
+        self.__deferred_split()
         self.__filter_future_data()
         self.__set_clusters()
         # __set_params() runs before training the model
@@ -204,13 +209,30 @@ class Model(object):
         # Fill numeric values with 0.0
         for column in df.select_dtypes(include=[np.int64, np.float64, np.float32]):
             df[column] = df[column].fillna(0.0)
+        # VF AI environment does not support planned baseline. The model always
+        # should be trained with baseline_units. As we need planned baseline,
+        # we make sustitution.
+        df['baseline_units'] = df['baseline_units_2']
         self.data = df
+        
+    def __deferred_split(self):
+        # Create deferred sample
+        split = LastSplitting(self.data, self.target_ratio_defer)
+        indexes = split.get_split()
+        mask = self.data.index.isin(indexes)
+        self.deferred_data = self.data[mask]
+        self.data = self.data[~mask]
         
     def __load_future_data(self):
         if not os.path.isfile(self.future_data_filename):
             raise IOError, "Please specify a correct file with train dataset. File not found: " \
                 + self.future_data_filename
-        self.future_data = pd.read_msgpack(self.future_data_filename)
+        df = pd.read_msgpack(self.future_data_filename)
+        # VF AI environment does not support planned baseline. The model always
+        # should be trained with baseline_units. As we need planned baseline,
+        # we make sustitution.
+        df['baseline_units'] = df['baseline_units_2']
+        self.future_data = df
         
     def __filter_future_data(self):
         """
@@ -299,11 +321,11 @@ class Model(object):
         print("The model is trained")
         self.__tips_save()
         self.__tips_analysis()
-        
+
     def train_save_to_vf(self):
         self.check_status()
         self.__set_params()
-        train_x = self.data #[self.features]
+        train_x = self.data
         train_y = self.data[self.target]
         self.model_to_vf = MultiModel(group_col='account_banner',
                                  clusters=self.clusters,
@@ -343,16 +365,19 @@ class Model(object):
             'future_data_filename': self.future_data_filename,
             'future_target': self.future_target,
             'confidence_threshold': self.confidence_threshold,
+            'evaluation_metrics': self.evaluation_metrics,
+            'evaluation_deferred_metrics': self.evaluation_deferred_metrics,
+            'evaluation_future_metrics': self.evaluation_future_metrics,
             'confidence_metrics': self.confidence_metrics,
+            'confidence_deferred_metrics': self.confidence_deferred_metrics,
             'confidence_future_metrics': self.confidence_future_metrics,
             'account_filter': list(self.account_filter),
             'account_test_filter': list(self.account_test_filter),
             'max_evals': self.max_evals,
-            'target_ratio_val': self.target_ratio_val,
+            'target_ratio_param': self.target_ratio_param,
+            'target_ratio_defer': self.target_ratio_defer,
             'target_ratio_test': self.target_ratio_test,
             'test_splits': self.test_splits,
-            'evaluation_metrics': self.evaluation_metrics,
-            'evaluation_future_metrics': self.evaluation_future_metrics,
         }
         with open(meta_path, 'w') as meta_file:
             json.dump(meta_data, meta_file)
@@ -404,17 +429,20 @@ class Model(object):
                 self.future_data_filename = meta_data.get('future_data_filename')
                 self.future_target = meta_data.get('future_target')
                 self.confidence_threshold = meta_data.get('confidence_threshold')
+                self.evaluation_metrics = meta_data.get('evaluation_metrics')
+                self.evaluation_deferred_metrics = meta_data.get('evaluation_deferred_metrics')
+                self.evaluation_future_metrics = meta_data.get('evaluation_future_metrics')
                 self.confidence_metrics = meta_data.get('confidence_metrics')
+                self.confidence_deferred_metrics = meta_data.get('confidence_deferred_metrics')
                 self.confidence_future_metrics = meta_data.get('confidence_future_metrics')
                 self.account_filter = meta_data.get('account_filter')
                 self.account_test_filter = meta_data.get('account_test_filter')
                 self.max_evals = meta_data.get('max_evals')
-                self.target_ratio_val = meta_data.get('target_ratio_val')
+                self.target_ratio_param = meta_data.get('target_ratio_param')
+                self.target_ratio_defer = meta_data.get('target_ratio_defer')
                 self.target_ratio_test = meta_data.get('target_ratio_test')
                 self.test_splits = meta_data.get('test_splits')
-                self.evaluation_metrics = meta_data.get('evaluation_metrics')
-                self.evaluation_future_metrics = meta_data.get('evaluation_future_metrics')
-
+                
     def __standard_load(self):
         prediction_model = PredictionModel(self.model_name, path=self.output_dir, one_hot_encode=False)
         self.model = prediction_model.model
@@ -426,6 +454,7 @@ class Model(object):
         self.__load_dataset()
         self.__load_future_data()
         self.__apply_account_filter()
+        self.__deferred_split()
         self.__filter_future_data()
         for key in self.model.named_steps['model'].selected_features:
             self.features = self.model.named_steps['model'].selected_features[key]
@@ -453,7 +482,7 @@ class Model(object):
             print("model.create(")
             print("    params=None,")
             print("    max_evals=10,")
-            print("    target_ratio_val=None,")
+            print("    target_ratio_param=None,")
             print("    feature_filename='./outputs/im_feature_info_dict_mars_ru_20210212.txt',")
             print("    features=None,")
             print("    target='total_units',")

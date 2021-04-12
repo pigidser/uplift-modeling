@@ -40,7 +40,7 @@ class Hyperparameters(object):
         }
         self.seed = 0
         self.max_evals = self.model.max_evals
-        self.target_ratio_val = self.model.target_ratio_val or 0.30
+        self.target_ratio_param = self.model.target_ratio_param or 0.30
         
     def score(self, params, train_x_group, train_y_group, val_x_group, val_y_group):
 
@@ -120,7 +120,7 @@ class Hyperparameters(object):
         """
         # Making one split
         splitting = Splitting(splits=None, data=self.model.data,
-                              number_tests=1, target_ratio_test=self.target_ratio_val)
+                              number_tests=1, target_ratio=self.target_ratio_param)
         
         train, val = splitting.get_split(0, self.model.data)
         

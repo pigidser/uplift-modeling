@@ -19,12 +19,4 @@ class ClusterTransform(BaseEstimator, TransformerMixin):
             elif isinstance(self.cat_feature, (unicode, str)):
                 # category is a feature
                 X['cluster'] = X[self.cat_feature]
-            elif isinstance(self.cat_feature, list):
-                cluster_map = dict()
-                for account in X['account_banner'].unique():
-                    if account in self.cat_feature:
-                        cluster_map[account] = account
-                    else:
-                        cluster_map[account] = 'general_cluster'
-                X['cluster'] = X['account_banner'].replace(cluster_map)
         return X
