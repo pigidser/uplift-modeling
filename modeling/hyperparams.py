@@ -120,7 +120,8 @@ class Hyperparameters(object):
         """
         # Making one split
         splitting = Splitting(splits=None, data=self.model.data,
-                              number_tests=1, target_ratio=self.target_ratio_param)
+                              number_tests=1, target_ratio=self.target_ratio_param,
+                              cat_feature = self.model.cat_feature)
         
         train, val = splitting.get_split(0, self.model.data)
         

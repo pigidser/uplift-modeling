@@ -114,7 +114,8 @@ class AnalysisMetrics(object):
             self.recalculate = False
                     
         self.test_splitting = Splitting(splits=self.model.test_splits, data=self.model.data,
-                                        number_tests=self.number_tests, target_ratio=self.target_ratio_test)
+                                        number_tests=self.number_tests, target_ratio=self.target_ratio_test,
+                                        cat_feature = self.model.cat_feature)
         self.__get_unique_index_splits()
         self.__evaluate_model()
         self.__initialize_confidence_filter()
@@ -182,23 +183,6 @@ class AnalysisMetrics(object):
             self.confidence_filter = filts
         else:
             self.confidence_filter = None
-
-#     def __initialize_confidence_future_filter(self):
-#         """ Find a filter for future data"""
-#         if self.confidence_threshold != 0:
-#             df = self.__parse_detailed_metrics(['mape_f_m_h'], self.evaluation_future_metrics)
-#             df = (df.groupby(['account_banner','original_product_dimension_25','original_product_dimension_26'])
-#                               .median().reset_index())
-#             filts = dict()
-#             for i, row in enumerate(df[df['mape_f_m_h'] > self.confidence_threshold].itertuples()):
-#                 filt = dict()
-#                 filt['account_banner'] = row[1]
-#                 filt['original_product_dimension_25'] = row[2]
-#                 filt['original_product_dimension_26'] = row[3]
-#                 filts[i] = filt
-#             self.filter_future_data = filts
-#         else:
-#             self.filter_future_data = None
             
     def __calculate_model(self):
         self.confidence_metrics = self.model.confidence_metrics
@@ -288,9 +272,6 @@ class AnalysisMetrics(object):
         
         self.train, self.test = self.test_splitting.get_split(seed, self.model.data)
 
-        # Remove duped rows (possibly duplication has been provided)
-        self.test = self.test.drop('cluster', axis=1).drop_duplicates()
-        
         # Apply account test filter
         if not self.account_test_filter is None:
             self.test = self.test[self.test['account_banner'].isin(self.account_test_filter)]
@@ -862,27 +843,6 @@ class AnalysisMetrics(object):
                 df_p.to_excel(writer, sheet_name=account)
                                    
         print("Model Confidence Criteria report is saved to {}".format(report_name))
-    
-#     def get_filter_future_data(self):
-#         if self.confidence_threshold == 0:
-#             print("Product filter is not defined.")
-#             return
-#         print("Future test filter for threshold {}:".format(self.confidence_threshold))
-#         df = pd.DataFrame(self.filter_future_data).T.sort_values(
-#             ['account_banner','original_product_dimension_25','original_product_dimension_26'])
-#         print(df.to_string())
-
-#     def get_product_filter(self, filter='historic'):
-#         if filter == 'historic':
-#             filters = self.confidence_filter
-#             print("historic filter:")
-#         else:
-#             filters = self.filter_future_data
-#             print("future filter:")
-#         for key in filters.keys():
-#             print("{} / {} / {}".format(filters[key]['account_banner'],
-#                                         filters[key]['original_product_dimension_25'],
-#                                         filters[key]['original_product_dimension_26']))
             
     def __get_supported_metrics(self, metric_filter):
         supported_metrics = list(['r2','wape','mape','bias','sfa'])
@@ -893,13 +853,74 @@ class AnalysisMetrics(object):
             if len(cleared_metic_filter) == 0:
                 cleared_metic_filter = supported_metrics
         return cleared_metic_filter
-            
-    def plot_confidence_comparison(self, metric_filter=None):
+        
+    def plot_metrics(self, periods=['historical'], metric_type='evaluation', metric_filter=None):
         metric_filter = self.__get_supported_metrics(metric_filter)
         for metric in metric_filter:
-            self.__plot_confidence_comparison(metric)
+            self.__plot_metrics(periods, metric_type, metric)
 
-    def __plot_confidence_comparison(self, metric):
+    def __plot_metrics(self, periods, metric_type, metric):
+        
+        title = self.__get_figure_title(metric_type, metric)
+        ylabel = metric.upper()
+        
+        estimation_types = []
+        if 'historical' in periods:
+            estimation_types += ['_m','_h']
+        if 'deferred' in periods:
+            estimation_types += ['_d_m','_d_h']
+        if 'future' in periods:
+            estimation_types += ['__m_h','_f_m_h']
+
+        data = self.__get_figure_data(metric_type, metric, estimation_types)
+        
+        labels = data[estimation_types[0]]['labels']
+        x = np.arange(len(labels))  # the label locations
+
+        plt.rcParams['figure.dpi'] = 100
+        
+        if len(estimation_types) == 2:
+            width = 0.35
+            offsets = [-0.5, 0.5]
+            plt.rcParams['figure.figsize'] = [6, 6]
+            plt.rcParams["font.size"] = "8"
+        elif len(estimation_types) == 4:
+            width = 0.20
+            offsets = [-1.5, -0.5, 0.5, 1.5]
+            plt.rcParams['figure.figsize'] = [8, 6]
+            plt.rcParams["font.size"] = "7"
+        elif len(estimation_types) == 6:
+            width = 0.14
+            offsets = [-2.5, -1.5, -0.5, 0.5, 1.5, 2.5]
+            plt.rcParams['figure.figsize'] = [10, 6]
+            plt.rcParams["font.size"] = "7"
+        else:
+            raise Exception("Length of estimation_types is {} (instead of 2 or 4 or 6).".format(len(estimation_types)))
+
+        fig, ax = plt.subplots()
+        for i, offset in enumerate(offsets):
+            rects = ax.bar(x + offset*width, data[estimation_types[i]]['values'],
+                           width, label=data[estimation_types[i]]['description'])
+            autolabel(ax, rects)
+            assert data[estimation_types[0]]['labels'] == data[estimation_types[i]]['labels']
+
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.legend()
+        plt.xticks(rotation = 45)
+
+        fig.tight_layout()
+
+        plt.show()
+        
+    def plot_confidence_comparison(self, period='historical', metric_filter=None):
+        metric_filter = self.__get_supported_metrics(metric_filter)
+        for metric in metric_filter:
+            self.__plot_confidence_comparison(period, metric)
+
+    def __plot_confidence_comparison(self, period, metric):
 
         plt.rcParams['figure.figsize'] = [12, 4]
         plt.rcParams['figure.dpi'] = 100
@@ -909,34 +930,32 @@ class AnalysisMetrics(object):
         metric_max = []
         metric_min = []
 
-        def figure(ax, metric_type, metric, ylabel, title):
-            if metric_type == 'evaluation':
-                df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
-            elif metric_type == 'confidence':
-                df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
-
-            columns_m, columns_h, labels = list(), list(), list()
-            for column in df.columns:
-                if metric + '_m' in column:
-                    columns_m.append(column)
-                    labels.append(column[:-len(metric)-4])
-                elif metric + '_h' in column:
-                    columns_h.append(column)
-
-            model = df[columns_m].squeeze().values
-            human = df[columns_h].squeeze().values
-            metric_max.append(np.concatenate([model, human]).max())
-            metric_min.append(np.concatenate([model, human]).min())
+        def figure(ax, period, metric_type, metric, ylabel, title):
             
-            x = np.arange(len(labels))  # the label locations
-            width = 0.35  # the width of the bars
-            rects1 = ax.bar(x - width/2, model, width, label='Model vs Fact')
-            rects2 = ax.bar(x + width/2, human, width, label='Human vs Fact')
+            if period == 'historical':
+                estimation_types = ['_m','_h']
+            elif period == 'deferred':
+                estimation_types = ['_d_m','_d_h']
+            elif period == 'future':
+                estimation_types = ['__m_h','_f_m_h']
 
-            autolabel(ax, rects1)
-            autolabel(ax, rects2)
+            data = self.__get_figure_data(metric_type, metric, estimation_types)
 
-            # Add some text for labels, title and custom x-axis tick labels, etc.
+            labels = data[estimation_types[0]]['labels']
+            x = np.arange(len(labels))
+
+            metric_max.append(np.concatenate([data[estimation_types[0]]['values'],
+                                              data[estimation_types[1]]['values']]).max())
+            metric_min.append(np.concatenate([data[estimation_types[0]]['values'],
+                                              data[estimation_types[1]]['values']]).min())
+            
+            width = 0.35
+            offsets = [-0.5, 0.5]
+            for i, offset in enumerate(offsets):
+                rects = ax.bar(x + offset*width, data[estimation_types[i]]['values'],
+                               width, label=data[estimation_types[i]]['description'])
+                autolabel(ax, rects)
+                assert data[estimation_types[0]]['labels'] == data[estimation_types[i]]['labels']
             
             ax.set_ylabel(ylabel)
             ax.set_title(title)
@@ -948,13 +967,13 @@ class AnalysisMetrics(object):
         fig, axs = plt.subplots(1,2)
         plt.tight_layout() 
 
-        title = "{}: Median {} (all product groups)".format(self.model.model_name, ylabel)
-        figure(axs[0], 'evaluation', metric, ylabel, title=title)
+        title = "{}: {} (all product groups)".format(self.model.model_name, ylabel)
+        figure(axs[0], period, 'evaluation', metric, ylabel, title=title)
         
-        title = "{}: Median {} (confident product groups, MAPE threshold={}".format(self.model.model_name,
-                                                                                    ylabel,
-                                                                                    self.confidence_threshold)
-        figure(axs[1], 'confidence', metric, ylabel, title=title)
+        title = "{}: {} (confident product groups, MAPE threshold={}".format(self.model.model_name,
+                                                                             ylabel,
+                                                                             self.confidence_threshold)
+        figure(axs[1], period, 'confidence', metric, ylabel, title=title)
         
         y_lim_max = 0 if max(metric_max) < 0 else max(metric_max) * 1.2
         y_lim_min = 0 if min(metric_min) > 0 else min(metric_min) * 1.2
@@ -964,89 +983,17 @@ class AnalysisMetrics(object):
         
         plt.show()
         
-    def plot_performance_metrics(self, metric_type='evaluation', metric_filter=None):
-        metric_filter = self.__get_supported_metrics(metric_filter)
-        for metric in metric_filter:
-            self.__plot_performance_metric(metric_type, metric)
-
-    def __plot_performance_metric(self, metric_type, metric):
-        
-        plt.rcParams['figure.figsize'] = [10, 6]
-        plt.rcParams['figure.dpi'] = 100
-        plt.rcParams["font.size"] = "8"
-
-        ylabel = metric.upper()
-        
-        if metric_type == 'evaluation':
-            df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
-            title = self.model.model_name + ': Median ' + ylabel + ' (all product groups)'
-        elif metric_type == 'confidence':
-            df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
-            title = self.model.model_name + ': Median ' + ylabel + ' (confident product groups)'
-        
-        columns_m = list()
-        columns_h = list()
-        columns_m_h = list()
-        columns_f_m_h = list()
-        labels = list()
-        for column in df.columns:
-            if metric + '_m' in column:
-                columns_m.append(column)
-                labels.append(column[:-len(metric)-4])
-            elif metric + '_h' in column:
-                columns_h.append(column)
-            elif metric + '__m' in column:
-                columns_m_h.append(column)
-            elif metric + '_f_m' in column:
-                columns_f_m_h.append(column)
-
-        df_m = df[columns_m]
-        df_h = df[columns_h]
-        df_m_h = df[columns_m_h]
-        df_f_m_h = df[columns_f_m_h]
-
-        model = df_m.squeeze().values
-        human = df_h.squeeze().values
-        model_human = df_m_h.squeeze().values
-        future_model_human = df_f_m_h.squeeze().values
-        
-        x = np.arange(len(labels))  # the label locations
-        width = 0.22  # the width of the bars
-
-        fig, ax = plt.subplots()
-        rects1 = ax.bar(x - width - width/2, model, width, label='Model vs Fact')
-        rects2 = ax.bar(x - width/2, human, width, label='Human vs Fact')
-        rects3 = ax.bar(x + width/2, model_human, width, label='Model vs Human (Historic)')
-        rects4 = ax.bar(x + width + width/2, future_model_human, width, label='Model vs Human (Future)')
-
-        # Add some text for labels, title and custom x-axis tick labels, etc.
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels)
-        ax.legend()
-        plt.xticks(rotation = 45)
-
-        autolabel(ax, rects1)
-        autolabel(ax, rects2)
-        autolabel(ax, rects3)
-        autolabel(ax, rects4)
-
-        fig.tight_layout()
-
-        plt.show()
-        
-    def plot_confidence_comparison_account(self):
+    def plot_confidence_comparison_account(self, period='historical'):
         for account in self.account_test_filter:
-            self.__plot_confidence_comparison_account(account)
+            self.__plot_confidence_comparison_account(period, account)
             
-    def __plot_confidence_comparison_account(self, account):
+    def __plot_confidence_comparison_account(self, period, account):
 
         plt.rcParams['figure.figsize'] = [5, 4]
         plt.rcParams['figure.dpi'] = 100
         plt.rcParams["font.size"] = "8"
 
-        title = self.model.model_name + ': ' + account
+        title = "{}: {} ({})".format(self.model.model_name, account, period)
 
         fig, ax = plt.subplots()
         plt.tight_layout()
@@ -1055,13 +1002,20 @@ class AnalysisMetrics(object):
         df_c = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
 
         columns_e, columns_c, labels = list(), list(), list()
-        metric_filter = ['r2_m','wape_m','mape_m','bias_m','sfa_m']
+        
+        if period == 'historical':
+            metric_filter = ['r2_m','wape_m','mape_m','bias_m','sfa_m']
+        elif period == 'deferred':
+            metric_filter = ['r2_d_m','wape_d_m','mape_d_m','bias_d_m','sfa_d_m']
+        elif period == 'future':
+            metric_filter = ['r2_f_m_h','wape_f_m_h','mape_f_m_h','bias_f_m_h','sfa_f_m_h']
+
         for column in df_e.columns:
             if account in column:
                 for metric in metric_filter:
                     if column[-len(metric):] == metric:
                         columns_e.append(column)
-                        labels.append(metric)
+                        labels.append(metric[:metric.find('_')])
         for column in df_c.columns:
             if account in column:
                 for metric in metric_filter:
@@ -1070,6 +1024,7 @@ class AnalysisMetrics(object):
 
         evaluation = df_e[columns_e].squeeze().values
         confidence = df_c[columns_c].squeeze().values
+        
         x = np.arange(len(labels))  # the label locations
         width = 0.35  # the width of the bars
         rects1 = ax.bar(x - width/2, evaluation, width, label='All products')
@@ -1079,8 +1034,8 @@ class AnalysisMetrics(object):
         autolabel(ax, rects1)
         autolabel(ax, rects2)
 
-        # Add some text for labels, title and custom x-axis tick labels, etc.
-    #     ax.set_ylabel(ylabel)
+        ylabel = self.__estimation_type_description(metric_filter[0][2:])
+        ax.set_ylabel(ylabel)
         ax.set_title(title)
         ax.set_xticks(x)
         ax.set_xticklabels(labels)
@@ -1089,125 +1044,50 @@ class AnalysisMetrics(object):
 
         plt.show()
         
-        
-    def plot_performance_metrics_historic(self, metric_type='evaluation', metric_filter=None):
-        metric_filter = self.__get_supported_metrics(metric_filter)
-        for metric in metric_filter:
-            self.__plot_performance_metrics_historic(metric_type, metric)
-
-    def __plot_performance_metrics_historic(self, metric_type, metric):
-        
-        plt.rcParams['figure.figsize'] = [6, 6]
-        plt.rcParams['figure.dpi'] = 100
-        plt.rcParams["font.size"] = "8"
-
-        ylabel = metric.upper()
+    def __get_figure_data(self, metric_type, metric, estimation_types):
         
         if metric_type == 'evaluation':
             df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
-            title = self.model.model_name + ': Median ' + ylabel + ' (all product groups)'
         elif metric_type == 'confidence':
             df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
-            title = self.model.model_name + ': Median ' + ylabel + ' (confident product groups)'
         
-        columns_m = list()
-        columns_h = list()
-        labels = list()
-        for column in df.columns:
-            if metric + '_m' in column:
-                columns_m.append(column)
-                labels.append(column[:-len(metric)-4])
-            elif metric + '_h' in column:
-                columns_h.append(column)
-
-        df_m = df[columns_m]
-        df_h = df[columns_h]
-
-        model = df_m.squeeze().values
-        human = df_h.squeeze().values
+        data = dict()
+        for estimation_type in estimation_types:
+            d = dict()
+            columns = list()
+            labels = list()
+            for column in df.columns:
+                if metric + estimation_type in column:
+                    columns.append(column)
+                    labels.append(column[:column.find(' /')])
+            d['values'] = df[columns].squeeze().values
+            d['labels'] = labels
+            d['description'] = self.__estimation_type_description(estimation_type)
+            data[estimation_type] = d
         
-        x = np.arange(len(labels))  # the label locations
-        width = 0.35  # the width of the bars
+        return data
 
-        fig, ax = plt.subplots()
-        rects1 = ax.bar(x - width/2, model, width, label='Model vs Fact')
-        rects2 = ax.bar(x + width/2, human, width, label='Human vs Fact')
-
-        # Add some text for labels, title and custom x-axis tick labels, etc.
-#         ax.set_ylim(0, 1)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels)
-        ax.legend()
-        plt.xticks(rotation = 45)
-
-        autolabel(ax, rects1)
-        autolabel(ax, rects2)
-
-        fig.tight_layout()
-
-        plt.show()
-
-        
-    def plot_performance_metrics_future(self, metric_type='evaluation', metric_filter=None):
-        metric_filter = self.__get_supported_metrics(metric_filter)
-        for metric in metric_filter:
-            self.__plot_performance_metrics_future(metric_type, metric)
-
-    def __plot_performance_metrics_future(self, metric_type, metric):
-        
+    def __estimation_type_description(self, estimation_type):
+        description = {
+            '_m': 'Model vs Fact (hist.)',
+            '_h': 'Human vs Fact (hist.)',
+            '_d_m': 'Model vs Fact (deferred)',
+            '_d_h': 'Human vs Fact (deferred)',
+            '__m_h': 'Model vs Human (hist.)',
+            '_f_m_h': 'Model vs Human (future)',
+        }
+        return description.get(estimation_type, 'Description not found')
+    
+    def __set_figure_size(self):
         plt.rcParams['figure.figsize'] = [6, 6]
         plt.rcParams['figure.dpi'] = 100
         plt.rcParams["font.size"] = "8"
-
-        ylabel = metric.upper()
         
-        if metric_type == 'evaluation':
-            df = pd.concat([self.evaluation_overalls, self.evaluation_accounts], axis=1)
-            title = self.model.model_name + ': Median ' + ylabel + ' (all product groups)'
-        elif metric_type == 'confidence':
-            df = pd.concat([self.confidence_overalls, self.confidence_accounts], axis=1)
-            title = self.model.model_name + ': Median ' + ylabel + ' (confident product groups)'
-        
-        columns_m_h = list()
-        columns_f_m_h = list()
-        labels = list()
-        for column in df.columns:
-            if metric + '__m' in column:
-                columns_m_h.append(column)
-                labels.append(column[:-len(metric)-4])
-            elif metric + '_f_m' in column:
-                columns_f_m_h.append(column)
-
-        df_m_h = df[columns_m_h]
-        df_f_m_h = df[columns_f_m_h]
-
-        model_human = df_m_h.squeeze().values
-        future_model_human = df_f_m_h.squeeze().values
-        
-        x = np.arange(len(labels))  # the label locations
-        width = 0.35  # the width of the bars
-
-        fig, ax = plt.subplots()
-        rects1 = ax.bar(x - width/2, model_human, width, label='Model vs Human (Historic)')
-        rects2 = ax.bar(x + width/2, future_model_human, width, label='Model vs Human (Future)')
-
-        # Add some text for labels, title and custom x-axis tick labels, etc.
-#         ax.set_ylim(0, 1)
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels)
-        ax.legend()
-        plt.xticks(rotation = 45)
-
-        autolabel(ax, rects1)
-        autolabel(ax, rects2)
-
-        fig.tight_layout()
-
-        plt.show()
+    def __get_figure_title(self, metric_type, metric):
+        title = "{}: {} ({})".format(self.model.model_name,
+                                   metric.upper(),
+                                   'all product groups' if metric_type=='evaluation' else 'confident product groups')
+        return title
         
     def overall_metrics_dataframe(self, metric_type):
         if metric_type not in ['evaluation','confidence']:
@@ -1296,23 +1176,58 @@ class AnalysisMetrics(object):
                 df.to_excel(writer, sheet_name=account)
                                    
         print("Model's metrics is saved to {}".format(report_name))
-
+        
+    def deferred_data_prediction(self):
+        """ Save to a file the data for model and human accuracy comparison """
+        # Report file name
+        report_name = os.path.join(self.model.output_dir, self.model.model_name + '_deferred_data_prediction.xlsx')
+        # Get data and make prediction
+        df = self.model.deferred_data.copy()
+        pred = self.model.model.predict(df)
+        # Get required  fields from the data
+        df = df[['promotion_name','account_banner','promotion_status','promotion_ext_id','original_product_dimension_26',
+                 'prod_desc','yearweek','discount_perc','baseline_units_2',
+                 'total_units_2','baseline_units','total_units','total_ef_qty']]
+        # Calculate additional fields and cast to int
+        df['lift_2'] = df['total_units_2'] / df['baseline_units_2']
+        df['total_units_pred'] = pred
+        df['lift_pred'] = df['total_units_pred'] / df['baseline_units_2']
+        df['human_abs_error'] = np.abs(df['total_units_2'] - df['baseline_units_2'])
+        df['model_abs_error'] = np.abs(df['total_units_pred'] - df['baseline_units_2'])
+        df['wrong_promo'] = 0
+        df['baseline_units_2'] = df['baseline_units_2'].astype(int)
+        df['total_units_2'] = df['total_units_2'].astype(int)
+        df['total_units_pred'] = df['total_units_pred'].astype(int)
+        df['baseline_units'] = df['baseline_units'].astype(int)
+        df['total_units'] = df['total_units'].astype(int)
+        df['total_ef_qty'] = df['total_ef_qty'].astype(int)
+        df['human_abs_error'] = df['human_abs_error'].astype(int)
+        df['model_abs_error'] = df['model_abs_error'].astype(int)
+        # Ordered fields
+        df = df[['promotion_name','account_banner','promotion_status','promotion_ext_id','original_product_dimension_26',
+                 'prod_desc','yearweek','discount_perc','baseline_units_2','total_units_2','lift_2','total_units_pred',
+                 'lift_pred','baseline_units','total_units','total_ef_qty','human_abs_error','model_abs_error','wrong_promo']]
+        # Saving
+        with pd.ExcelWriter(report_name) as writer:
+            df.to_excel(writer, sheet_name='report')
+        
     def __tips_useful_methods(self):
         if not self.show_tips:
             return
-        print("Useful methods")
-        print("--------------")
-        print("- analysis_metrics.confidence_criteria()")
-        print("- analysis_metrics.plot_confidence_comparison(metric_filter=None)")
-        print("- analysis_metrics.plot_confidence_comparison_account()")
-        print("- analysis_metrics.plot_performance_metrics(metric_type, metric_filter=None)")
-        print("- analysis_metrics.plot_performance_metrics_historic(metric_type=, metric_filter=None)")
-        print("- analysis_metrics.plot_performance_metrics_future(metric_type, metric_filter=None)")
-        print("To get metrics as dataframe:")
-        print("- analysis_metrics.overall_metrics_dataframe(metric_type)")
-        print("- analysis_metrics.account_metrics_dataframe(metric_type)")
-        print("or save all metrics to file:")
-        print("- analysis_metrics.save_all_metrics()")
-        print("")
+        print("-- Reports --")
+        print("analysis_metrics.confidence_criteria()")
+        print("analysis_metrics.deferred_data_prediction()")
+        print("-- Plotting --")
+        print("analysis_metrics.plot_confidence_comparison(period='historical', metric_filter=None)")
+        print("analysis_metrics.plot_confidence_comparison_account(period='historical')")
+        print("analysis_metrics.plot_metrics(periods=['historical','deferred','future'],")
+        print("                              metric_type='evaluation', metric_filter=['r2'])")
+        print("-- Get metrics as dataframe --")
+        print("analysis_metrics.overall_metrics_dataframe(metric_type)")
+        print("analysis_metrics.account_metrics_dataframe(metric_type)")
+        print("-- Save all metrics to file --")
+        print("analysis_metrics.save_all_metrics()")
+        print("-- Parameter's values --")
+        print("period = 'historical' or 'deferred' or 'future'")
         print("metric_type = 'evaluation' or 'confidence'")
         print("metric_filter = ['r2','mape','sfa','bias','wape']")

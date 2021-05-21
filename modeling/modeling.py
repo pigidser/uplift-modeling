@@ -5,11 +5,11 @@ import json
 
 from vf_portalytics.multi_model import MultiModel
 from vf_portalytics.model import PredictionModel
+from vf_portalytics.ml_helpers import CustomClusterTransformer
 
 from splitting import LastSplitting
 from hyperparams import Hyperparameters
 from analysis import AnalysisMetrics
-from transforms import ClusterTransform
 
 from sklearn.pipeline import Pipeline
 
@@ -80,28 +80,61 @@ class Model(object):
         self.model_trained = False
         self.__tips_create_or_load()
         
-    def get_info(self):
+    def get_model_info(self):
         print("--- Model Information ---")
         print("Name: {}".format(self.model_name))
         if not self.model_initialized:
             print("Not initialized")
             return
-        print("feature_filename: {}".format(self.feature_filename))
+        if not self.model_trained:
+            print("The model is not trained.")
+        if not self.evaluation_metrics:
+            print("The model is not evaluated.")
         print("output_dir: {}".format(self.output_dir))
         print("data_filename : {}".format(self.data_filename))
-        print("filter_filename : {}".format(self.filter_filename))
-        print("target : {}".format(self.target))
-        print("cat_feature : {}".format(self.cat_feature))
         print("future_data_filename : {}".format(self.future_data_filename))
+        print("filter_filename : {}".format(self.filter_filename))
+        print("feature_filename: {}".format(self.feature_filename))
+        print("features: {}".format(self.features))
+        print("target : {}".format(self.target))
         print("future_target : {}".format(self.future_target))
-        print("evaluation_metrics : {}".format('Not defined' if self.evaluation_metrics is None else 'Defined'))
-        print("evaluation_future_metrics : {}".format('Not defined' if self.evaluation_future_metrics is None else 'Defined'))
-        print("confidence_threshold : {}".format(self.confidence_threshold))
-        print("confidence_metrics : {}".format('Not defined' if self.confidence_metrics is None else 'Defined'))
-        print("confidence_future_metrics : {}".format('Not defined' if self.confidence_future_metrics is None else 'Defined'))
         print("account_filter : {}".format(self.account_filter))
         print("account_test_filter : {}".format(self.account_test_filter))
+        print("cat_feature : {}".format(self.cat_feature))
+        print("duplication_map : {}".format(self.duplication_map))
+        print("params : {}".format(self.params))
+        print("max_evals : {}".format(self.max_evals))
+        print("target_ratio_param : {}".format(self.target_ratio_param))
+        print("target_ratio_defer : {}".format(self.target_ratio_defer))
+        print("target_ratio_test : {}".format(self.target_ratio_test))
+        print("Number of test_splits : {}".format(len(self.test_splits)))
+        print("confidence_threshold : {}".format(self.confidence_threshold))
         print("-------------------------")
+        
+    def get_data_info(self):
+        print("--- Data Information ---")
+        print("Model name: {}".format(self.model_name))
+        print("")
+        if not self.model_initialized:
+            print("Not initialized")
+            return
+        print("Historical data:")
+        print("----------------")
+        print("length: {}".format(self.data.drop('cluster', axis=1).drop_duplicates().shape[0]))
+        if self.duplication_map:
+            print("length after duplication: {}".format(self.data.shape[0]))
+        print("yearweek from/to: {0}/{1}".format(self.data.yearweek.min(), self.data.yearweek.max()))
+        print("")
+        print("Deferred data:")
+        print("--------------")
+        print("length: {}".format(self.deferred_data.shape[0]))
+        print("yearweek from/to: {0}/{1}".format(self.deferred_data.yearweek.min(), self.deferred_data.yearweek.max()))
+        print("")
+        print("Future data:")
+        print("------------")
+        print("length: {}".format(self.future_data.shape[0]))
+        print("yearweek from/to: {0}/{1}".format(self.future_data.yearweek.min(), self.future_data.yearweek.max()))
+        print("")
         
     def get_duplication_info(self):
         return self.data.groupby(['cluster','account_banner']).size()
@@ -159,6 +192,7 @@ class Model(object):
             # Apply filter to historic and future data
             self.data = self.data[self.data['account_banner'].isin(self.account_filter)]
             self.future_data = self.future_data[self.future_data['account_banner'].isin(self.account_filter)]
+        print("Data length after account filter: {}".format(self.data.shape[0]))
 
     def __apply_duplication_map(self):
         if not self.duplication_map is None:
@@ -195,8 +229,9 @@ class Model(object):
             raise IOError, "Please specify a correct file with train dataset. File not found: " + self.data_filename
         if not os.path.isfile(self.filter_filename):
             raise IOError, "Please specify a correct file with a filter for train dataset. " + \
-                "File not found: " + self.data_filename
+                "File not found: " + self.filter_filename
         df = pd.read_msgpack(self.data_filename)
+        print("Data length in the train dataset: {}".format(df.shape[0]))
         # Get filter for dataset
         with open(self.filter_filename, 'r') as file:
             remaining_index_dict = json.load(file)
@@ -211,9 +246,10 @@ class Model(object):
             df[column] = df[column].fillna(0.0)
         # VF AI environment does not support planned baseline. The model always
         # should be trained with baseline_units. As we need planned baseline,
-        # we make sustitution.
+        # we make substitution.
         df['baseline_units'] = df['baseline_units_2']
         self.data = df
+        print("Data length after filter: {}".format(self.data.shape[0]))
         
     def __deferred_split(self):
         # Create deferred sample
@@ -222,6 +258,7 @@ class Model(object):
         mask = self.data.index.isin(indexes)
         self.deferred_data = self.data[mask]
         self.data = self.data[~mask]
+        print("Historical data length: {}, deferred data length: {}".format(self.data.shape[0], self.deferred_data.shape[0]))
         
     def __load_future_data(self):
         if not os.path.isfile(self.future_data_filename):
@@ -230,7 +267,7 @@ class Model(object):
         df = pd.read_msgpack(self.future_data_filename)
         # VF AI environment does not support planned baseline. The model always
         # should be trained with baseline_units. As we need planned baseline,
-        # we make sustitution.
+        # we make substitution.
         df['baseline_units'] = df['baseline_units_2']
         self.future_data = df
         
@@ -266,10 +303,10 @@ class Model(object):
         
         mask = self.future_data['total_units_2'] <= self.future_data['baseline_units_2']
         all_masks = np.add(all_masks, mask.values)
-        print("- planned in-store total volume lower then baseline: {}".format(self.future_data[mask].shape[0]))
+        print("- planned in-store total volume lower then planned baseline: {}".format(self.future_data[mask].shape[0]))
         
         self.future_data = self.future_data[~all_masks]
-        print("- New future data length: {}".format(self.future_data.shape[0]))
+        print("Future data length after filter: {}".format(self.future_data.shape[0]))
         
     def __load_features(self):
         """Load features from a file"""
@@ -290,7 +327,7 @@ class Model(object):
         (categories are based in a specific feature) or having one model
         
         """
-        self.data = ClusterTransform(self.cat_feature).transform(self.data)
+        self.data = CustomClusterTransformer(self.cat_feature).transform(self.data)
         self.clusters = self.data['cluster'].unique()
         self.selected_features = {}
         for cluster in self.clusters:
@@ -301,14 +338,14 @@ class Model(object):
             hyper = Hyperparameters(self)
             hyper.find_params()
             self.params = hyper.params
-
+        
     def train(self):
         self.check_status()
         self.__set_params()
         train_x = self.data #[self.features]
         train_y = self.data[self.target]
-        self.model = Pipeline([  
-            ('transform', ClusterTransform(self.cat_feature)),
+        self.model = Pipeline([
+            ('transform', CustomClusterTransformer(self.cat_feature)),
             ('model', MultiModel(group_col='cluster',
                                  clusters=self.clusters,
                                  params=self.params,
@@ -321,33 +358,6 @@ class Model(object):
         print("The model is trained")
         self.__tips_save()
         self.__tips_analysis()
-
-    def train_save_to_vf(self):
-        self.check_status()
-        self.__set_params()
-        train_x = self.data
-        train_y = self.data[self.target]
-        self.model_to_vf = MultiModel(group_col='account_banner',
-                                 clusters=self.clusters,
-                                 params=self.params,
-                                 selected_features=self.selected_features,
-                                 nominals=self.nominal_features,
-                                 ordinals=self.ordinal_features)
-            
-        self.model_to_vf.fit(train_x, train_y)
-        
-        # VF related saving
-        prediction_model = PredictionModel(self.model_name + '_VF', path=self.output_dir,
-                                           one_hot_encode=False)
-        prediction_model.model = self.model_to_vf
-        # save feature names (no strictly since all the preprocessing is made being made in the pipeline)
-        prediction_model.features = {key: [] for key in self.features}
-        prediction_model.target = {self.target: []}
-
-        prediction_model.ordered_column_list = sorted(prediction_model.features.keys())
-        prediction_model.save()
-
-        print("The model is trained and save (compatible with VF)")
         
     def __extended_save(self):
         # Additional information storing
@@ -388,7 +398,7 @@ class Model(object):
                                            one_hot_encode=False)
         prediction_model.model = self.model
         # save feature names (no strictly since all the preprocessing is made being made in the pipeline)
-        prediction_model.features = {key: [] for key in self.features}
+        prediction_model.features = {key: [] for key in self.data.columns if key != 'cluster'}
         prediction_model.target = {self.target: []}
 
         prediction_model.ordered_column_list = sorted(prediction_model.features.keys())
@@ -445,6 +455,7 @@ class Model(object):
                 
     def __standard_load(self):
         prediction_model = PredictionModel(self.model_name, path=self.output_dir, one_hot_encode=False)
+        # Not using the PredictionModel wrap, but only the core model (pipeline).
         self.model = prediction_model.model
         
     def load(self):
